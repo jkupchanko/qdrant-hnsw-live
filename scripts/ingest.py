@@ -113,6 +113,17 @@ def project_2d(vectors: np.ndarray) -> np.ndarray:
     return coords.astype(np.float32)
 
 
+# Variant collections so the demo can hot-swap distance metrics and graph
+# density live. Same vectors, same payloads, different index configs.
+VARIANTS = [
+    (COLLECTION,             models.Distance.COSINE, 16),
+    (f"{COLLECTION}_dot",    models.Distance.DOT,    16),
+    (f"{COLLECTION}_euclid", models.Distance.EUCLID, 16),
+    (f"{COLLECTION}_m4",     models.Distance.COSINE, 4),
+    (f"{COLLECTION}_m64",    models.Distance.COSINE, 64),
+]
+
+
 def upload_to_qdrant(items: list[dict], vectors: np.ndarray) -> None:
     url = os.environ.get("QDRANT_URL")
     api_key = os.environ.get("QDRANT_API_KEY")
@@ -123,29 +134,6 @@ def upload_to_qdrant(items: list[dict], vectors: np.ndarray) -> None:
 
     print(f"  Connecting to {url}...")
     client = QdrantClient(url=url, api_key=api_key, timeout=60)
-
-    if client.collection_exists(COLLECTION):
-        print(f"  Recreating collection '{COLLECTION}'...")
-        client.delete_collection(COLLECTION)
-
-    client.create_collection(
-        collection_name=COLLECTION,
-        vectors_config=models.VectorParams(size=VECTOR_SIZE, distance=models.Distance.COSINE),
-    )
-
-    # Payload indexes so we can filter by genre, mood, or year.
-    for field in ("genres", "mood", "director"):
-        client.create_payload_index(
-            collection_name=COLLECTION,
-            field_name=field,
-            field_schema=models.PayloadSchemaType.KEYWORD,
-        )
-    client.create_payload_index(
-        collection_name=COLLECTION,
-        field_name="year",
-        field_schema=models.PayloadSchemaType.INTEGER,
-    )
-    print("  Created payload indexes on genres / mood / director / year.")
 
     points = [
         models.PointStruct(
@@ -164,14 +152,30 @@ def upload_to_qdrant(items: list[dict], vectors: np.ndarray) -> None:
         for item, vector in zip(items, vectors)
     ]
 
-    # Batch the upsert — Qdrant Cloud closes the connection on very large
-    # bodies. 500-point batches are safe and fast.
     BATCH = 500
-    for start in range(0, len(points), BATCH):
-        chunk = points[start : start + BATCH]
-        client.upsert(collection_name=COLLECTION, points=chunk, wait=True)
-        print(f"  Uploaded {start + len(chunk)}/{len(points)}")
-    print(f"  Uploaded {len(points)} points to Qdrant collection '{COLLECTION}'.")
+    for name, distance, m in VARIANTS:
+        if client.collection_exists(name):
+            print(f"  Recreating '{name}'...")
+            client.delete_collection(name)
+        client.create_collection(
+            collection_name=name,
+            vectors_config=models.VectorParams(size=VECTOR_SIZE, distance=distance),
+            hnsw_config=models.HnswConfigDiff(m=m),
+        )
+        for field in ("genres", "mood", "director"):
+            client.create_payload_index(name, field, models.PayloadSchemaType.KEYWORD)
+        client.create_payload_index(name, "year", models.PayloadSchemaType.INTEGER)
+        client.create_payload_index(
+            name, "description",
+            models.TextIndexParams(
+                type=models.TextIndexType.TEXT,
+                tokenizer=models.TokenizerType.WORD,
+                lowercase=True,
+            ),
+        )
+        for start in range(0, len(points), BATCH):
+            client.upsert(collection_name=name, points=points[start : start + BATCH], wait=True)
+        print(f"  '{name}' ready: distance={distance.value}, m={m}, {len(points)} points")
 
 
 def write_frontend_bundle(items: list[dict], coords: np.ndarray, query_vectors: np.ndarray) -> None:

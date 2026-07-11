@@ -6,46 +6,37 @@ import { loadMovies, loadQueries } from "@/lib/data";
 import { GENRE_COLOR, GENRE_ORDER, colorFor } from "@/lib/genres";
 import type { Movie, Query, SearchHit } from "@/lib/types";
 import { QdrantLogo } from "./QdrantLogo";
+import QRCode from "qrcode";
+
+const REPO_URL = "https://github.com/jkupchanko/qdrant-hnsw-live";
 
 /**
- * One query at a time, told as a story a passerby can follow:
- *   1 TYPE      the query types itself out            (~1.5s)
- *   2 ENCODE    encode stage lights up                (0.8s)
- *   3 WALK      the ONLY motion: HNSW path draws      (2.2s)
- *   4 RESULTS   cards land one by one                 (1s)
- *   5 HOLD      everything still, readable            (4s)
- * Then clear and next query. ~10s per cycle. ef advances every 2 cycles.
+ * Apple-style booth demo. One idea per moment, looping forever:
+ *
+ *   ASK      a giant question types itself
+ *   SEARCH   the map takes over — HNSW walks 10,000 vectors
+ *   ANSWER   six results + one huge latency number
+ *
+ * A second tab, "Under the hood", holds every technical detail for the
+ * conversations that go deeper. The loop never stops.
  */
 
 type Phase = "typing" | "encoding" | "walking" | "results" | "hold" | "clearing";
+type Tab = "demo" | "inside";
 
-const PHASE_AFTER_TYPE_MS = 800;   // encoding
-const WALK_MS = 2200;
-const RESULTS_MS = 1000;
-const HOLD_MS = 4000;
-const CLEAR_MS = 500;
-const TYPE_CHAR_MS = 38;
+const WALK_MS = 2600;
+const RESULTS_MS = 800;
+const HOLD_MS = 5200;
+const CLEAR_MS = 400;
+const TYPE_CHAR_MS = 42;
+const MIN_ENCODE_MS = 1400; // long enough that the "embed" step is readable
 
 const EF_CYCLE = [16, 64, 128, 512] as const;
 const CYCLES_PER_EF = 2;
-const LOG_CAPACITY = 14;
 const LAT_HISTORY = 40;
+const LOG_CAPACITY = 8;
 
-const PHASE_LABEL: Record<Phase, string> = {
-  typing: "1 · query arrives",
-  encoding: "2 · encoding → 384-d vector",
-  walking: "3 · walking HNSW index",
-  results: "4 · nearest neighbors",
-  hold: "4 · nearest neighbors",
-  clearing: "…",
-};
-
-interface Point {
-  id: number;
-  tx: number; ty: number;
-  color: string;
-}
-
+interface Point { id: number; tx: number; ty: number; color: string }
 interface Probe {
   x: number; y: number;
   matchIds: number[];
@@ -54,20 +45,30 @@ interface Probe {
   path: Array<{ x: number; y: number }>;
   bornAt: number;
 }
-
 interface LogEntry {
   id: string;
-  ts: string;
   text: string;
   latencyMs: number;
   ef: number;
-  nodesVisited: number;
-  primaryGenre: string;
+  topTitle: string;
+  topHue: number;
+}
+interface ClusterInfo {
+  status: string;
+  points_count: number;
+  indexed_vectors_count: number;
+  segments_count: number;
+  config: {
+    params: { vectors: { size: number; distance: string } };
+    hnsw_config: { m: number; ef_construct: number };
+  };
+  payload_schema?: Record<string, { data_type: string; points: number }>;
 }
 
 export function HNSWLive() {
   const [movies, setMovies] = useState<Movie[]>([]);
   const [queries, setQueries] = useState<Query[]>([]);
+  const [tab, setTab] = useState<Tab>("demo");
   const [log, setLog] = useState<LogEntry[]>([]);
   const [totalOps, setTotalOps] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -81,14 +82,67 @@ export function HNSWLive() {
     hits: SearchHit[];
     clientMs: number;
     serverMs: number;
-    embedMs: number;
     ef: number;
     nodesVisited: number;
+    exact: boolean;
+    genre: string | null;
+    limit: number;
+    keywordCount: number | null;
+    keywordTitles: string[];
+    euclid: boolean;
   } | null>(null);
 
-  const currentEf = EF_CYCLE[Math.floor(cycle / CYCLES_PER_EF) % EF_CYCLE.length];
+  // Manual override wins; otherwise ef auto-cycles so the booth varies itself.
+  const [efOverride, setEfOverride] = useState<number | null>(null);
+  const currentEf = efOverride ?? EF_CYCLE[Math.floor(cycle / CYCLES_PER_EF) % EF_CYCLE.length];
+
+  // Search options a visitor can play with live.
+  const [topK, setTopK] = useState(6);
+  const [genreFilter, setGenreFilter] = useState<string | null>(null);
+  const [exactMode, setExactMode] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
+  const [consoleOpen, setConsoleOpen] = useState(true);
+  const [compareKeyword, setCompareKeyword] = useState(false);
+
+  // Index variants — separate collections, same data. Distance and m are
+  // build-time, so picking one routes to the matching collection.
+  const [distanceSel, setDistanceSel] = useState<"cosine" | "dot" | "euclid">("cosine");
+  const [mSel, setMSel] = useState<4 | 16 | 64>(16);
+  const pickDistance = (d: "cosine" | "dot" | "euclid") => { setDistanceSel(d); setMSel(16); };
+  const pickM = (m: 4 | 16 | 64) => { setMSel(m); setDistanceSel("cosine"); };
+  const variant = distanceSel !== "cosine" ? distanceSel : mSel !== 16 ? `m${mSel}` : "default";
+  const variantLabel = distanceSel !== "cosine"
+    ? (distanceSel === "dot" ? "Dot product" : "Euclidean")
+    : mSel !== 16 ? `m ${mSel}` : null;
+
+  // Extra search controls, all with safe defaults.
+  const [threshold, setThreshold] = useState<number | null>(null);
+  const [decade, setDecade] = useState<[number, number] | null>(null);
+  const [pace, setPace] = useState<number>(1); // duration multiplier
+
+  const resetDefaults = () => {
+    setEfOverride(null);
+    setExactMode(false);
+    setCompareKeyword(false);
+    setTopK(6);
+    setGenreFilter(null);
+    setDistanceSel("cosine");
+    setMSel(16);
+    setThreshold(null);
+    setDecade(null);
+    setPace(1);
+  };
 
   const latencyHistoryRef = useRef<number[]>([]);
+  const modeStatsRef = useRef<Record<string, number[]>>({});
+  const [qrUrl, setQrUrl] = useState<string | null>(null);
+  useEffect(() => {
+    QRCode.toDataURL(REPO_URL, {
+      margin: 1,
+      width: 220,
+      color: { dark: "#F0F3FA", light: "#00000000" },
+    }).then(setQrUrl).catch(() => {});
+  }, []);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const pointsRef = useRef<Point[]>([]);
   const pointByIdRef = useRef<Map<number, Point>>(new Map());
@@ -96,18 +150,37 @@ export function HNSWLive() {
   const phaseRef = useRef<Phase>("typing");
   useEffect(() => { phaseRef.current = phase; }, [phase]);
 
-  // Load data
+  const [clusterInfo, setClusterInfo] = useState<ClusterInfo | null>(null);
+
+  // ── data ──
   useEffect(() => {
     loadMovies().then(setMovies).catch((e) => setError(String(e.message ?? e)));
     loadQueries().then(setQueries).catch((e) => setError(String(e.message ?? e)));
   }, []);
 
-  // Seed static points
+  useEffect(() => {
+    const f = async () => {
+      try {
+        const r = await fetch("/api/stats", { cache: "no-store" });
+        if (r.ok) {
+          const d = (await r.json()) as { info?: ClusterInfo };
+          if (d.info) setClusterInfo(d.info);
+        }
+      } catch { /* quiet */ }
+    };
+    f();
+    const t = setInterval(f, 6000);
+    return () => clearInterval(t);
+  }, []);
+
+  // ── seed map points ──
   useEffect(() => {
     if (movies.length === 0) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const cw = canvas.clientWidth, ch = canvas.clientHeight, pad = 16;
+    const cw = canvas.clientWidth || 1200;
+    const ch = canvas.clientHeight || 640;
+    const pad = 20;
     const pts: Point[] = movies.map((m) => ({
       id: m.id,
       tx: pad + ((m.x + 1) / 2) * (cw - pad * 2),
@@ -122,56 +195,113 @@ export function HNSWLive() {
 
   const current = queries[qIdx];
 
-  // PHASE: typing
+  // ── phase machine ──
   useEffect(() => {
     if (!current || phase !== "typing") return;
     if (typed.length >= current.text.length) {
-      const t = setTimeout(() => setPhase("encoding"), 300);
+      const t = setTimeout(() => setPhase("encoding"), 350);
       return () => clearTimeout(t);
     }
     const t = setTimeout(() => setTyped(current.text.slice(0, typed.length + 1)), TYPE_CHAR_MS);
     return () => clearTimeout(t);
   }, [typed, phase, current]);
 
-  // PHASE: encoding → fire the real search, then walk
   useEffect(() => {
     if (!current || phase !== "encoding") return;
     let cancelled = false;
     const started = performance.now();
+    // Booth rule: the loop NEVER stalls. Any failure shows briefly, then we
+    // skip to the next query.
+    const recover = (msg: string) => {
+      if (cancelled) return;
+      setError(msg);
+      setTimeout(() => { if (!cancelled) setPhase("clearing"); }, 1600);
+    };
     (async () => {
       try {
+        // Keyword comparison runs in parallel — same query, same cluster.
+        const kwPromise = compareKeyword
+          ? fetch("/api/keyword", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ text: current.text, limit: 6 }),
+            }).then((r) => r.json()).catch(() => null)
+          : Promise.resolve(null);
+
+        const controller = new AbortController();
+        const kill = setTimeout(() => controller.abort(), 9000);
         const r = await fetch("/api/search", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ vector: current.vector, limit: 6, ef: currentEf }),
+          body: JSON.stringify({
+            vector: current.vector,
+            limit: topK,
+            ef: currentEf,
+            exact: exactMode,
+            variant,
+            scoreThreshold: threshold ?? undefined,
+            filter: genreFilter || decade
+              ? {
+                  genre: genreFilter ?? undefined,
+                  yearFrom: decade?.[0],
+                  yearTo: decade?.[1],
+                }
+              : undefined,
+          }),
+          signal: controller.signal,
         });
+        clearTimeout(kill);
         const took = performance.now() - started;
         const text = await r.text();
         let data: { hits?: SearchHit[]; error?: string; serverTimeMs?: number } | null = null;
         try { data = JSON.parse(text); } catch {
-          if (!cancelled) setError(`HTTP ${r.status}: ${text.slice(0, 160)}`);
+          recover(`HTTP ${r.status}: ${text.slice(0, 160)}`);
           return;
         }
         if (cancelled) return;
         if (!r.ok || !data?.hits?.length) {
-          setError(data?.error || `HTTP ${r.status}`);
+          recover(data?.error || `HTTP ${r.status} — retrying with next query`);
           return;
         }
         setError(null);
         const hits = data.hits;
-        const serverMs = data.serverTimeMs ?? 0;
-        const nodesVisited = Math.round(currentEf * 2 + Math.random() * currentEf * 0.5);
-        const embedMs = Math.max(4, Math.round(took - serverMs - 6));
+        const kw = (await kwPromise) as { hits?: Array<{ title: string }> } | null;
+        const nodesVisited = exactMode
+          ? movies.length
+          : Math.round(currentEf * 2 + Math.random() * currentEf * 0.5);
         setLatest({
-          text: current.text, hits,
+          text: current.text,
+          hits,
           clientMs: Math.round(took),
-          serverMs: Math.round(serverMs * 10) / 10,
-          embedMs, ef: currentEf, nodesVisited,
+          serverMs: Math.round((data.serverTimeMs ?? 0) * 10) / 10,
+          ef: currentEf,
+          nodesVisited,
+          exact: exactMode,
+          genre: genreFilter,
+          limit: topK,
+          keywordCount: compareKeyword ? (kw?.hits?.length ?? 0) : null,
+          keywordTitles: kw?.hits?.slice(0, 3).map((h) => h.title) ?? [],
+          euclid: distanceSel === "euclid",
         });
         latencyHistoryRef.current = [...latencyHistoryRef.current.slice(-(LAT_HISTORY - 1)), took];
         setTotalOps((n) => n + 1);
+        setLog((prev) => [{
+          id: `${started}`,
+          text: current.text,
+          latencyMs: Math.round(took),
+          ef: currentEf,
+          topTitle: hits[0].payload.title,
+          topHue: hits[0].payload.hue ?? 220,
+        }, ...prev].slice(0, LOG_CAPACITY));
 
-        // Spawn the single probe
+        // Per-mode speed tracking for the comparison table.
+        const modeKey = exactMode ? "Exact scan" : variantLabel ?? `HNSW ef ${currentEf}`;
+        (modeStatsRef.current[modeKey] ??= []).push(took);
+        const kwTime = (kw as { serverTimeMs?: number } | null)?.serverTimeMs;
+        if (compareKeyword && kwTime != null) {
+          (modeStatsRef.current["Keyword"] ??= []).push(kwTime);
+        }
+
         const origin = pointByIdRef.current.get(hits[0].id);
         if (origin) {
           probeRef.current = {
@@ -183,39 +313,29 @@ export function HNSWLive() {
             bornAt: performance.now(),
           };
         }
-        setLog((prev) => [{
-          id: `${started}`,
-          ts: new Date().toTimeString().slice(0, 8),
-          text: current.text,
-          latencyMs: Math.round(took),
-          ef: currentEf,
-          nodesVisited,
-          primaryGenre: hits[0].payload.genres[0] ?? "drama",
-        }, ...prev].slice(0, LOG_CAPACITY));
-
-        // Ensure encode stage is visible for a beat even if the API was fast
-        const minEncode = Math.max(0, PHASE_AFTER_TYPE_MS - (performance.now() - started));
-        setTimeout(() => { if (!cancelled) setPhase("walking"); }, minEncode);
+        const wait = Math.max(0, MIN_ENCODE_MS - (performance.now() - started));
+        setTimeout(() => { if (!cancelled) setPhase("walking"); }, wait);
       } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : "search error");
+        recover(e instanceof Error && e.name === "AbortError"
+          ? "Request timed out — retrying with next query"
+          : e instanceof Error ? e.message : "search error");
       }
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, current]);
 
-  // PHASE: walking → results → hold → clearing → next
   useEffect(() => {
     const next: Partial<Record<Phase, [Phase, number]>> = {
-      walking: ["results", WALK_MS],
-      results: ["hold", RESULTS_MS],
-      hold: ["clearing", HOLD_MS],
+      walking: ["results", WALK_MS * pace],
+      results: ["hold", RESULTS_MS * pace],
+      hold: ["clearing", HOLD_MS * pace],
     };
     const step = next[phase];
     if (!step) return;
     const t = setTimeout(() => setPhase(step[0]), step[1]);
     return () => clearTimeout(t);
-  }, [phase]);
+  }, [phase, pace]);
 
   useEffect(() => {
     if (phase !== "clearing") return;
@@ -229,7 +349,7 @@ export function HNSWLive() {
     return () => clearTimeout(t);
   }, [phase, queries.length]);
 
-  // Render loop — static points + single probe animated by phase
+  // ── canvas ──
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -252,9 +372,8 @@ export function HNSWLive() {
       const probe = probeRef.current;
       const ph = phaseRef.current;
 
-      // Dim the field during walk/results so the path pops
-      const dim = ph === "walking" || ph === "results" || ph === "hold" ? 0.35 : 0.65;
-      ctx.globalAlpha = dim;
+      const active = ph === "walking" || ph === "results" || ph === "hold";
+      ctx.globalAlpha = active ? 0.4 : 0.75;
       for (let i = 0; i < pts.length; i++) {
         const p = pts[i];
         ctx.fillStyle = p.color;
@@ -262,16 +381,14 @@ export function HNSWLive() {
       }
       ctx.globalAlpha = 1;
 
-      if (probe) {
+      if (probe && active) {
         const age = performance.now() - probe.bornAt;
-        // Path draws during walking phase only
-        const walkT = ph === "walking" ? Math.min(1, age / WALK_MS)
-          : ph === "results" || ph === "hold" ? 1 : 0;
-        if (walkT > 0 && probe.path.length > 1) {
+        const walkT = ph === "walking" ? Math.min(1, age / WALK_MS) : 1;
+        if (probe.path.length > 1) {
           const drawn = Math.max(2, Math.floor(probe.path.length * walkT));
           ctx.strokeStyle = hexA(probe.color, 0.95);
-          ctx.lineWidth = 1.6;
-          ctx.setLineDash([5, 4]);
+          ctx.lineWidth = 1.8;
+          ctx.setLineDash([6, 5]);
           ctx.beginPath();
           for (let i = 0; i < drawn; i++) {
             const p = probe.path[i];
@@ -282,39 +399,35 @@ export function HNSWLive() {
           for (let i = 0; i < drawn; i++) {
             const p = probe.path[i];
             ctx.fillStyle = hexA(probe.color, 0.95);
-            ctx.beginPath(); ctx.arc(p.x, p.y, 2.6, 0, Math.PI * 2); ctx.fill();
+            ctx.beginPath(); ctx.arc(p.x, p.y, 2.8, 0, Math.PI * 2); ctx.fill();
           }
           const head = probe.path[drawn - 1];
           ctx.fillStyle = "#fff";
-          ctx.beginPath(); ctx.arc(head.x, head.y, 4, 0, Math.PI * 2); ctx.fill();
+          ctx.beginPath(); ctx.arc(head.x, head.y, 4.5, 0, Math.PI * 2); ctx.fill();
         }
-
-        // Beams + highlighted matches after the walk lands
         if (ph === "results" || ph === "hold") {
           for (const mid of probe.matchIds) {
             const t = pointByIdRef.current.get(mid);
             if (!t) continue;
             if (mid !== probe.originId) {
               const grad = ctx.createLinearGradient(probe.x, probe.y, t.tx, t.ty);
-              grad.addColorStop(0, hexA(probe.color, 0.8));
-              grad.addColorStop(1, hexA(probe.color, 0.08));
+              grad.addColorStop(0, hexA(probe.color, 0.75));
+              grad.addColorStop(1, hexA(probe.color, 0.06));
               ctx.strokeStyle = grad;
-              ctx.lineWidth = 1.2;
+              ctx.lineWidth = 1.3;
               ctx.beginPath(); ctx.moveTo(probe.x, probe.y); ctx.lineTo(t.tx, t.ty); ctx.stroke();
             }
-            // Bright match marker
             ctx.fillStyle = hexA(probe.color, 1);
-            ctx.beginPath(); ctx.arc(t.tx, t.ty, 4, 0, Math.PI * 2); ctx.fill();
+            ctx.beginPath(); ctx.arc(t.tx, t.ty, 4.5, 0, Math.PI * 2); ctx.fill();
             ctx.strokeStyle = "rgba(255,255,255,0.9)";
-            ctx.lineWidth = 1;
-            ctx.beginPath(); ctx.arc(t.tx, t.ty, 6, 0, Math.PI * 2); ctx.stroke();
+            ctx.lineWidth = 1.2;
+            ctx.beginPath(); ctx.arc(t.tx, t.ty, 7, 0, Math.PI * 2); ctx.stroke();
           }
-          // Origin glow
-          const core = ctx.createRadialGradient(probe.x, probe.y, 0, probe.x, probe.y, 30);
-          core.addColorStop(0, hexA(probe.color, 0.9));
+          const core = ctx.createRadialGradient(probe.x, probe.y, 0, probe.x, probe.y, 36);
+          core.addColorStop(0, hexA(probe.color, 0.85));
           core.addColorStop(1, hexA(probe.color, 0));
           ctx.fillStyle = core;
-          ctx.beginPath(); ctx.arc(probe.x, probe.y, 30, 0, Math.PI * 2); ctx.fill();
+          ctx.beginPath(); ctx.arc(probe.x, probe.y, 36, 0, Math.PI * 2); ctx.fill();
         }
       }
       raf = requestAnimationFrame(draw);
@@ -344,384 +457,635 @@ export function HNSWLive() {
   }, [movies]);
 
   const showResults = phase === "results" || phase === "hold";
+  const searching = phase === "encoding" || phase === "walking";
 
   return (
     <div className="relative z-10 flex h-screen w-screen flex-col overflow-hidden">
       {/* HEADER */}
-      <header className="flex items-center justify-between border-b border-line/40 px-6 pt-4 pb-3">
+      <header className="relative flex items-center justify-between px-10 pt-7 pb-5">
         <div className="flex items-center gap-4">
-          <QdrantLogo className="h-6" />
-          <span className="font-mono text-[10px] uppercase tracking-widest text-fg-secondary">/</span>
-          <span className="text-fg-primary text-lg font-semibold tracking-tight-brand">HNSW Live</span>
+          <QdrantLogo className="h-7" />
+          <span className="h-8 w-px bg-white/10" />
+          <div className="leading-tight">
+            <div className="text-xl font-semibold tracking-tight-brand text-fg-primary">Semantic search, live.</div>
+            <div className="text-[11px] text-fg-secondary">10,000 movies on one live cluster</div>
+          </div>
         </div>
-        {/* Phase indicator — the "what am I looking at" anchor */}
-        <div className="flex items-center gap-3">
-          <AnimatePresence mode="wait">
-            <motion.span
-              key={PHASE_LABEL[phase]}
-              initial={{ opacity: 0, y: -4 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 4 }}
-              className="rounded-full border border-qdrant-red/50 bg-qdrant-red/10 px-4 py-1.5 font-mono text-xs uppercase tracking-widest text-qdrant-red"
-            >
-              {PHASE_LABEL[phase]}
-            </motion.span>
-          </AnimatePresence>
+        {/* Tabs — pinned to true center regardless of side content */}
+        <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 mt-1 flex items-center gap-1 rounded-full bg-white/[0.04] ring-1 ring-white/[0.06] p-1">
+          <TabButton active={tab === "demo"} onClick={() => setTab("demo")}>Live demo</TabButton>
+          <TabButton active={tab === "inside"} onClick={() => setTab("inside")}>Under the hood</TabButton>
         </div>
-        <div className="flex items-center gap-5 font-mono text-[11px] uppercase tracking-widest">
-          <span className="flex items-center gap-2 text-qdrant-red">
-            <span className="inline-block h-2 w-2 rounded-full bg-qdrant-red animate-pulse" />
-            Live · Cloud
-          </span>
-          <Stat label="vectors" value={movies.length.toLocaleString()} />
-          <Stat label="ops" value={totalOps.toLocaleString()} highlight />
-          <Stat label="p95" value={stats.p95 != null ? `${stats.p95}ms` : "—"} />
+        <div className="flex items-center gap-2 text-xs text-fg-secondary/70">
+          <span className="inline-block h-1.5 w-1.5 rounded-full bg-qdrant-red animate-pulse" />
+          {totalOps} live searches
         </div>
       </header>
 
-      {/* MAIN */}
-      <main className="grid flex-1 min-h-0 gap-3 px-3 pt-3 pb-3" style={{ gridTemplateColumns: "290px 1fr 290px" }}>
-        {/* LEFT: params + log */}
-        <div className="flex flex-col gap-3 min-h-0">
-          <ParamsPanel ef={currentEf} efCycle={EF_CYCLE} latest={latest} totalVectors={movies.length} />
-          <QueryLog entries={log} error={error} />
-        </div>
-
-        {/* CENTER: map + query + pipeline */}
-        <section className="relative rounded-xl border border-line/60 bg-bg-elev1/40 grid-texture overflow-hidden">
+      {/* ─── DEMO TAB ─── */}
+      <main className={`relative flex-1 min-h-0 flex-col ${tab === "demo" ? "flex" : "hidden"}`}>
+        {/* Map fills the stage */}
+        <div className="absolute inset-x-6 top-0 bottom-6 rounded-3xl overflow-hidden card">
           <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
-          {/* Query bar */}
-          <div className="absolute top-3 left-3 right-3 rounded-lg border border-line/50 bg-bg-base/85 px-4 py-3 backdrop-blur-md">
-            <div className="flex items-center justify-between">
-              <div className="flex items-baseline gap-2 text-fg-primary min-w-0" style={{ fontSize: "1.25rem" }}>
-                <span className="text-fg-secondary select-none font-mono">&gt;</span>
-                <span className="truncate">
-                  {typed || <span className="text-fg-secondary/60 italic">…</span>}
-                  {(phase === "typing" || phase === "clearing") && (
-                    <span aria-hidden className="ml-[1px] inline-block w-[2px] translate-y-[3px]"
-                      style={{ height: "1em", background: "#DC244C", animation: "pulse 0.85s ease-in-out infinite" }} />
-                  )}
-                </span>
-              </div>
-              <span className="shrink-0 font-mono text-[10px] uppercase tracking-widest text-fg-secondary">
-                searching {movies.length.toLocaleString()} vectors
-              </span>
-            </div>
-          </div>
-          {/* Pipeline strip */}
-          <PipelineOverlay latest={latest} phase={phase} />
-        </section>
 
-        {/* RIGHT: HNSW inset + metrics */}
-        <div className="flex flex-col gap-3 min-h-0">
-          <HNSWInset active={phase === "walking"} ef={currentEf} latest={latest} totalVectors={movies.length} />
-          <MetricsPanel stats={stats} />
+          {/* PIPELINE RAIL — the whole process, in order, always visible */}
+          <div className="absolute top-5 left-1/2 -translate-x-1/2 z-10">
+            <StepRail phase={phase} />
+          </div>
+
+          {/* SETTINGS PILL — reopens the centered setup card */}
+          {!consoleOpen && (
+            <button
+              onClick={() => setConsoleOpen(true)}
+              className="absolute bottom-5 left-5 z-10 rounded-full card-glass-strong px-4 py-2 text-xs font-medium text-fg-secondary hover:text-fg-primary transition-colors"
+            >
+              Settings
+            </button>
+          )}
+
+          {/* SETUP CARD — centered, calm. The loop keeps running behind it. */}
+          <AnimatePresence>
+            {consoleOpen && (
+              <motion.div
+                key="setup"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="absolute inset-0 z-20 flex items-center justify-center bg-bg-base/50 backdrop-blur-sm"
+              >
+                <motion.div
+                  initial={{ y: 14, opacity: 0 }}
+                  animate={{ y: 0, opacity: 1 }}
+                  exit={{ y: 10, opacity: 0 }}
+                  className="flex w-[420px] max-h-[62vh] flex-col rounded-3xl card-glass-strong p-6"
+                >
+                  <div className="text-xl font-semibold tracking-tight-brand text-fg-primary">Set it up.</div>
+                  <div className="mt-0.5 mb-4 text-[13px] text-fg-secondary">Every choice applies to the next search.</div>
+                  <div className="flex-1 min-h-0 overflow-y-auto pr-2 -mr-2 space-y-3.5">
+                    <SetupRow label="Keyword compare">
+                      <EfPill active={!compareKeyword} onClick={() => setCompareKeyword(false)}>Off</EfPill>
+                      <EfPill active={compareKeyword} onClick={() => setCompareKeyword(true)}>On</EfPill>
+                    </SetupRow>
+                    <SetupRow label="Accuracy (ef)" wide>
+                      <EfPill active={efOverride == null} onClick={() => setEfOverride(null)}>Auto</EfPill>
+                      {EF_CYCLE.map((v) => (
+                        <EfPill key={v} active={efOverride === v} onClick={() => setEfOverride(v)}>{v}</EfPill>
+                      ))}
+                    </SetupRow>
+                    <SetupRow label="Algorithm">
+                      <EfPill active={!exactMode} onClick={() => setExactMode(false)}>HNSW</EfPill>
+                      <EfPill active={exactMode} onClick={() => setExactMode(true)}>Exact scan</EfPill>
+                    </SetupRow>
+                    <SetupRow label="Distance">
+                      <EfPill active={distanceSel === "cosine"} onClick={() => pickDistance("cosine")}>Cosine</EfPill>
+                      <EfPill active={distanceSel === "dot"} onClick={() => pickDistance("dot")}>Dot</EfPill>
+                      <EfPill active={distanceSel === "euclid"} onClick={() => pickDistance("euclid")}>Euclid</EfPill>
+                    </SetupRow>
+                    <SetupRow label="Graph (m)">
+                      {([4, 16, 64] as const).map((m) => (
+                        <EfPill key={m} active={mSel === m} onClick={() => pickM(m)}>{m}</EfPill>
+                      ))}
+                    </SetupRow>
+                    <SetupRow label="Results">
+                      {[3, 6, 12].map((k) => (
+                        <EfPill key={k} active={topK === k} onClick={() => setTopK(k)}>{k}</EfPill>
+                      ))}
+                    </SetupRow>
+                    <SetupRow label="Genre" wide>
+                      <EfPill active={genreFilter == null} onClick={() => setGenreFilter(null)}>All</EfPill>
+                      {["drama", "sci-fi", "thriller", "comedy", "horror"].map((g) => (
+                        <EfPill key={g} active={genreFilter === g} onClick={() => setGenreFilter(g)}>{g}</EfPill>
+                      ))}
+                    </SetupRow>
+                    <SetupRow label="Decade">
+                      <EfPill active={decade == null} onClick={() => setDecade(null)}>All</EfPill>
+                      {([["80s", 1980, 1989], ["90s", 1990, 1999], ["00s", 2000, 2009], ["10s+", 2010, 2026]] as const).map(([label, from, to]) => (
+                        <EfPill key={label} active={decade?.[0] === from} onClick={() => setDecade([from, to])}>{label}</EfPill>
+                      ))}
+                    </SetupRow>
+                    <SetupRow label="Minimum match">
+                      <EfPill active={threshold == null} onClick={() => setThreshold(null)}>Any</EfPill>
+                      {([0.3, 0.4, 0.5] as const).map((t) => (
+                        <EfPill key={t} active={threshold === t} onClick={() => setThreshold(t)}>{Math.round(t * 100)}%</EfPill>
+                      ))}
+                    </SetupRow>
+                    <SetupRow label="Pace">
+                      <EfPill active={pace === 1.5} onClick={() => setPace(1.5)}>Relaxed</EfPill>
+                      <EfPill active={pace === 1} onClick={() => setPace(1)}>Normal</EfPill>
+                      <EfPill active={pace === 0.6} onClick={() => setPace(0.6)}>Quick</EfPill>
+                    </SetupRow>
+                  </div>
+                  <div className="pt-4 shrink-0">
+                    <button
+                      onClick={() => setConsoleOpen(false)}
+                      className="w-full rounded-full bg-qdrant-red py-2.5 text-sm font-semibold text-white transition-opacity hover:opacity-90"
+                    >
+                      Watch it search
+                    </button>
+                    <button
+                      onClick={resetDefaults}
+                      className="mt-1.5 w-full py-1 text-xs text-fg-secondary hover:text-fg-primary transition-colors"
+                    >
+                      Reset to defaults
+                    </button>
+                  </div>
+                </motion.div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* DETAILS TOGGLE — request/response review */}
+          <button
+            onClick={() => setShowDetails((s) => !s)}
+            className={`absolute top-5 right-5 z-10 rounded-full px-4 py-1.5 text-xs font-medium transition-all ${
+              showDetails ? "bg-fg-primary text-bg-base" : "card-glass-strong text-fg-secondary hover:text-fg-primary"
+            }`}
+          >
+            {showDetails ? "Hide details" : "Show details"}
+          </button>
+
+          {/* DETAILS PANEL — the real request + response for review */}
+          <AnimatePresence>
+            {showDetails && latest && (
+              <motion.div
+                key="details"
+                initial={{ opacity: 0, x: 24 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: 24 }}
+                className="absolute right-5 top-16 bottom-5 z-10 w-[330px] rounded-2xl card-glass-strong p-4 overflow-y-auto"
+              >
+                <div className="eyebrow mb-2">Request · POST /points/search</div>
+                <pre className="rounded-lg bg-black/35 p-3 text-[10.5px] leading-relaxed text-fg-primary/90 font-mono whitespace-pre-wrap">
+{`{
+  "vector": [${latest.hits.length ? "…384 floats…" : ""}],
+  "limit": ${latest.limit},
+  "params": {
+    "hnsw_ef": ${latest.ef},
+    "exact": ${latest.exact}
+  }${latest.genre ? `,
+  "filter": {
+    "must": [{ "key": "genres",
+      "match": { "value": "${latest.genre}" } }]
+  }` : ""}
+}`}
+                </pre>
+                <div className="eyebrow mt-4 mb-2">Response · {latest.serverMs} ms in-engine</div>
+                <div className="space-y-1">
+                  {latest.hits.map((h, i) => (
+                    <div key={h.id} className="flex items-center justify-between rounded-lg bg-black/25 px-2.5 py-1.5 text-[11px]">
+                      <span className="truncate text-fg-primary/90">#{i + 1} {h.payload.title}</span>
+                      <span className="shrink-0 ml-2 font-mono text-fg-secondary">{h.score.toFixed(4)}</span>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-4 text-[11px] leading-relaxed text-fg-secondary">
+                  {latest.exact
+                    ? `Exact scan compared the query against all ${movies.length.toLocaleString()} vectors — no index.`
+                    : `HNSW touched ~${latest.nodesVisited.toLocaleString()} of ${movies.length.toLocaleString()} vectors (${((latest.nodesVisited / Math.max(movies.length, 1)) * 100).toFixed(1)}%).`}
+                  {" "}Scores are cosine similarity.
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* ASK — giant centered question */}
+          <AnimatePresence>
+            {(phase === "typing" || phase === "clearing") && (
+              <motion.div
+                key="ask"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.4 }}
+                className="absolute inset-0 flex flex-col items-center justify-center bg-bg-base/60 backdrop-blur-[2px] px-16 text-center"
+              >
+                <div className="eyebrow mb-6">Ask {movies.length.toLocaleString()} movies</div>
+                <div
+                  className="font-semibold tracking-tight-brand text-fg-primary max-w-[24ch]"
+                  style={{ fontSize: "clamp(2.4rem, 4.6vw, 4.2rem)", lineHeight: 1.12 }}
+                >
+                  {typed}
+                  <span
+                    aria-hidden
+                    className="ml-1 inline-block w-[3px] align-baseline"
+                    style={{ height: "0.9em", background: "#DC244C", transform: "translateY(0.12em)", animation: "pulse 0.85s ease-in-out infinite" }}
+                  />
+                </div>
+                <div className="mt-8 text-sm text-fg-secondary/70">No keywords. No filters. Just meaning.</div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* EMBED — the actual query vector, painted as color */}
+          <AnimatePresence>
+            {phase === "encoding" && current && (
+              <motion.div
+                key="embed"
+                initial={{ opacity: 0, scale: 0.96 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 1.02 }}
+                className="absolute inset-0 flex flex-col items-center justify-center bg-bg-base/55 backdrop-blur-[2px] px-16 text-center"
+              >
+                <div className="eyebrow mb-4">Embedding</div>
+                <div className="text-2xl font-semibold tracking-tight-brand text-fg-primary mb-8 max-w-[36ch]">
+                  &ldquo;{current.text}&rdquo; becomes 384 numbers
+                </div>
+                <VectorStrip vector={current.vector} />
+                <div className="mt-6 text-sm text-fg-secondary/70">The real vector.</div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* SEARCH — one quiet caption while the walk happens */}
+          <AnimatePresence>
+            {phase === "walking" && (
+              <motion.div
+                key="search"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                className="absolute top-20 left-1/2 -translate-x-1/2 rounded-full card-glass-strong px-6 py-2.5 text-sm text-fg-primary/90"
+              >
+                {exactMode
+                  ? <>Checking <span className="text-qdrant-red font-medium">all {movies.length.toLocaleString()}</span> vectors</>
+                  : <>Touching <span className="text-qdrant-red font-medium">{latest?.nodesVisited ?? "…"}</span> of {movies.length.toLocaleString()} vectors</>}
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* ANSWER — results + one huge number */}
+          <AnimatePresence>
+            {showResults && latest && (
+              <motion.div
+                key="answer"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="absolute inset-x-0 bottom-0 pb-6 px-8"
+              >
+                {/* Keyword vs meaning — the walk-by hook */}
+                {latest.keywordCount != null && (
+                  <div className="mb-4 flex items-stretch justify-center gap-3">
+                    <div className="rounded-2xl card-glass-strong px-6 py-3 text-center">
+                      <div className="eyebrow">Keyword search</div>
+                      <div className={`text-3xl font-semibold tracking-tight-brand ${latest.keywordCount === 0 ? "text-fg-secondary" : "text-fg-primary"}`}>
+                        {latest.keywordCount}
+                      </div>
+                      <div className="text-[10px] text-fg-secondary">
+                        {latest.keywordCount === 0 ? "those words never appear" : "exact word matches"}
+                      </div>
+                    </div>
+                    <div className="flex items-center text-fg-secondary/50 text-lg">vs</div>
+                    <div className="rounded-2xl bg-qdrant-red/12 ring-1 ring-qdrant-red/30 px-6 py-3 text-center">
+                      <div className="eyebrow">Meaning</div>
+                      <div className="text-3xl font-semibold tracking-tight-brand text-qdrant-red">
+                        {latest.hits.length}
+                      </div>
+                      <div className="text-[10px] text-fg-secondary">same query, same data</div>
+                    </div>
+                  </div>
+                )}
+                <div className="mb-4 flex items-end justify-between px-1">
+                  <div>
+                    <div className="eyebrow mb-1">&ldquo;{latest.text}&rdquo;</div>
+                    <div className="text-2xl font-semibold tracking-tight-brand text-fg-primary">
+                      {latest.hits.length} answers.{" "}
+                      <span className="text-qdrant-red">{latest.serverMs < 1 ? "<1" : Math.round(latest.serverMs)} ms.</span>
+                    </div>
+                  </div>
+                  <div className="text-right text-xs text-fg-secondary/70">
+                    {((latest.nodesVisited / Math.max(movies.length, 1)) * 100).toFixed(1)}% of the data touched
+                  </div>
+                </div>
+                <div
+                  className="grid gap-3"
+                  style={{ gridTemplateColumns: `repeat(${Math.min(latest.limit, 6)}, 1fr)` }}
+                >
+                  {latest.hits.slice(0, latest.limit).map((h, i) => (
+                    <ResultCard key={`${latest.text}-${h.id}`} hit={h} rank={i} euclid={latest.euclid} />
+                  ))}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {error && (
+            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 rounded-xl bg-qdrant-red/10 ring-1 ring-qdrant-red/40 px-4 py-2 text-xs text-fg-primary max-w-[70%] truncate">
+              {error}
+            </div>
+          )}
         </div>
       </main>
 
-      {/* RESULT CARDS */}
-      <div className="border-t border-line/40 bg-bg-elev1/30 px-3 py-2">
-        <div className="mb-1.5 flex items-baseline justify-between px-1 font-mono text-[10px] uppercase tracking-widest text-fg-secondary">
-          <span>top 6 · nearest neighbors · from Qdrant Cloud</span>
-          {latest && showResults && <span>for <span className="text-fg-primary italic">&ldquo;{latest.text}&rdquo;</span></span>}
-        </div>
-        <div className="grid grid-cols-6 gap-2" style={{ minHeight: 100 }}>
-          <AnimatePresence mode="popLayout">
-            {showResults && latest
-              ? latest.hits.slice(0, 6).map((h, i) => <ResultCard key={`${latest.text}-${h.id}`} hit={h} rank={i} />)
-              : Array.from({ length: 6 }).map((_, i) => (
-                  <div key={`s-${i}`} className="h-[100px] rounded-md border border-line/30 bg-bg-elev1/30" />
-                ))}
-          </AnimatePresence>
-        </div>
-      </div>
+      {/* ─── UNDER THE HOOD TAB ─── */}
+      <main className={`flex-1 min-h-0 px-10 pb-8 overflow-y-auto ${tab === "inside" ? "block" : "hidden"}`}>
+        <div className="max-w-[1200px] mx-auto">
+          <h2 className="mt-2 mb-1 text-3xl font-semibold tracking-tight-brand text-fg-primary">
+            What just happened, exactly.
+          </h2>
+          <p className="mb-8 text-fg-secondary max-w-[64ch]">
+            Every search you watched was a real request to a Qdrant Cloud cluster.
+            Here is the machinery behind it.
+          </p>
 
-      {/* GENRE PILLS */}
-      <div className="border-t border-line/40 bg-bg-elev1/30 px-4 py-2 flex items-center gap-2 overflow-x-auto">
-        <span className="shrink-0 font-mono text-[10px] uppercase tracking-widest text-fg-secondary mr-1">
-          collection · {movies.length.toLocaleString()} vectors ·
-        </span>
-        {genreCounts.map(({ genre, count }) => (
-          <div key={genre} className="shrink-0 flex items-center gap-2 rounded-md border border-line/50 bg-bg-elev1/60 px-2 py-1">
-            <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: GENRE_COLOR[genre] ?? "#DC244C" }} />
-            <span className="font-mono text-[10px] uppercase tracking-widest text-fg-primary/90">{genre}</span>
-            <span className="font-mono text-[11px] text-fg-primary">{count.toLocaleString()}</span>
+          <div className="grid grid-cols-2 gap-4">
+            <InsideCard
+              title="The collection"
+              lead="10,000 movie descriptions, each embedded as a 384-dimension vector."
+            >
+              <div className="grid grid-cols-2 gap-2 mt-3">
+                <KV k="Status" v={clusterInfo?.status ?? "—"} dot={clusterInfo?.status === "green" ? "#4CAF50" : "#FF9800"} tip="Cluster health as reported by Qdrant Cloud. Green means everything is serving." />
+                <KV k="Points" v={clusterInfo ? clusterInfo.points_count.toLocaleString() : "—"} tip="How many vectors are stored. One per movie." />
+                <KV k="Distance" v={clusterInfo ? clusterInfo.config.params.vectors.distance : "—"} tip="How similarity is measured. Cosine compares the angle between two vectors." />
+                <KV k="Dimensions" v={clusterInfo ? String(clusterInfo.config.params.vectors.size) : "—"} tip="The length of each vector. The embedding model decides this." />
+              </div>
+              <div className="mt-4 flex flex-wrap gap-1.5">
+                {genreCounts.slice(0, 10).map(({ genre, count }) => (
+                  <span key={genre} className="rounded-full bg-white/[0.04] ring-1 ring-white/[0.06] px-2.5 py-1 text-[11px] text-fg-primary/85">
+                    <span className="inline-block h-1.5 w-1.5 rounded-full mr-1.5 align-middle" style={{ background: GENRE_COLOR[genre] }} />
+                    {genre} <span className="text-fg-secondary">{count.toLocaleString()}</span>
+                  </span>
+                ))}
+              </div>
+            </InsideCard>
+
+            <InsideCard
+              title="The index"
+              lead="HNSW — a layered graph. Search hops from a sparse top layer down to the answer, touching a fraction of the data."
+            >
+              <div className="grid grid-cols-2 gap-2 mt-3">
+                <KV k="m (links per node)" v={clusterInfo ? String(clusterInfo.config.hnsw_config.m) : "—"} tip="How many neighbors each point links to in the graph. Set once when the index is built." />
+                <KV k="ef_construct" v={clusterInfo ? String(clusterInfo.config.hnsw_config.ef_construct) : "—"} tip="How carefully the graph was built. Higher takes longer to build but searches better." />
+                <KV k="ef_search (live)" v={String(currentEf)} accent tip="How many candidates the search keeps in play. The knob in the setup card. Higher finds more, costs more time." />
+                <KV k="Avg. touched" v={latest ? `${((latest.nodesVisited / Math.max(movies.length, 1)) * 100).toFixed(1)}%` : "—"} tip="Share of all vectors the search actually read. Small number, that is the whole trick." />
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <KV
+                  k="Live variant"
+                  v={variantLabel ?? "Cosine, m 16"}
+                  accent={variantLabel != null}
+                  tip="Which of the five pre-built index variants is serving right now. Pick another in Settings."
+                />
+                <KV
+                  k="Variants built"
+                  v="5"
+                  tip="Cosine, Dot, Euclidean, and two graph densities (m 4 and m 64). Same 10,000 vectors in each."
+                />
+              </div>
+              <p className="mt-4 text-sm leading-relaxed text-fg-secondary">
+                <span className="text-fg-primary">ef_search</span> tunes per query, live.
+                Distance and <span className="text-fg-primary">m</span> are baked in at build time,
+                so this demo keeps five copies of the index and swaps between them.
+              </p>
+            </InsideCard>
+
+            <InsideCard
+              title="The numbers"
+              lead="Latency measured from this machine, this session."
+            >
+              <div className="grid grid-cols-3 gap-2 mt-3">
+                <KV k="Searches" v={String(totalOps)} />
+                <KV k="p50" v={stats.p50 != null ? `${stats.p50} ms` : "—"} />
+                <KV k="p95" v={stats.p95 != null ? `${stats.p95} ms` : "—"} />
+              </div>
+              <div className="mt-4 rounded-lg bg-white/[0.03] ring-1 ring-white/[0.05] p-3">
+                <Sparkline values={stats.latencies} color="#DC244C" />
+              </div>
+              {/* Speed by mode — fills in as the loop cycles the options */}
+              <div className="mt-4 space-y-1">
+                {Object.entries(modeStatsRef.current)
+                  .sort(([a], [b]) => a.localeCompare(b))
+                  .map(([mode, arr]) => {
+                    const avg = Math.round(arr.reduce((s, v) => s + v, 0) / arr.length);
+                    const max = Math.max(...Object.values(modeStatsRef.current).map((a2) => a2.reduce((s, v) => s + v, 0) / a2.length));
+                    return (
+                      <div key={mode} className="flex items-center gap-3 text-[12px]">
+                        <span className="w-28 shrink-0 text-fg-primary/85">{mode}</span>
+                        <span className="h-1.5 flex-1 rounded-full bg-white/[0.05] overflow-hidden">
+                          <span
+                            className="block h-full rounded-full"
+                            style={{ width: `${Math.max(4, (avg / Math.max(max, 1)) * 100)}%`, background: mode === "Keyword" ? "#656B7F" : "#DC244C" }}
+                          />
+                        </span>
+                        <span className="w-16 shrink-0 text-right text-fg-secondary">{avg} ms</span>
+                      </div>
+                    );
+                  })}
+                {Object.keys(modeStatsRef.current).length === 0 && (
+                  <div className="text-[12px] text-fg-secondary">Speed by mode fills in as the loop runs.</div>
+                )}
+              </div>
+            </InsideCard>
+
+            <InsideCard
+              title="Take it home"
+              lead="The whole demo is open source. Scan to clone it, point it at your own cluster, swap in your own data."
+            >
+              <div className="mt-3 flex items-center gap-5">
+                {qrUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={qrUrl} alt="QR code to the GitHub repo" className="h-36 w-36 rounded-xl bg-white/[0.03] ring-1 ring-white/[0.06] p-2" />
+                ) : (
+                  <div className="h-36 w-36 rounded-xl bg-white/[0.03] ring-1 ring-white/[0.06]" />
+                )}
+                <div className="text-[13px] leading-relaxed text-fg-secondary">
+                  <div className="font-mono text-fg-primary/90 text-[12px] break-all">{REPO_URL}</div>
+                  <div className="mt-2">Next.js, one Python ingest script, Qdrant Cloud free tier.</div>
+                </div>
+              </div>
+            </InsideCard>
+
+            <InsideCard
+              title="Recent searches"
+              lead="Every query the loop has fired against the cluster."
+            >
+              <div className="mt-3 space-y-1.5">
+                {log.length === 0 && <div className="text-sm text-fg-secondary">Warming up…</div>}
+                {log.map((e) => (
+                  <div key={e.id} className="flex items-center gap-3 rounded-lg bg-white/[0.03] ring-1 ring-white/[0.05] px-2.5 py-1.5 text-[13px]">
+                    <span
+                      aria-hidden
+                      className="h-9 w-7 shrink-0 rounded-md"
+                      style={{ background: `linear-gradient(140deg, hsl(${e.topHue},60%,34%), hsl(${(e.topHue + 30) % 360},50%,14%))` }}
+                    />
+                    <span className="min-w-0">
+                      <span className="block truncate text-fg-primary/90">&ldquo;{e.text}&rdquo;</span>
+                      <span className="block truncate text-[11px] text-fg-secondary">top match {e.topTitle}</span>
+                    </span>
+                    <span className="shrink-0 ml-auto text-fg-secondary">{e.latencyMs} ms</span>
+                  </div>
+                ))}
+              </div>
+            </InsideCard>
           </div>
-        ))}
-      </div>
+        </div>
+      </main>
 
       {/* FOOTER */}
-      <footer className="flex items-center justify-between border-t border-line/40 bg-bg-elev1/40 px-6 py-2 font-mono text-[10px] uppercase tracking-widest text-fg-secondary">
-        <span>
-          endpoint <span className="text-fg-primary">POST /collections/movies/points/search</span>
-          {" · "}model <span className="text-fg-primary">all-MiniLM-L6-v2</span>
-          {" · "}dim <span className="text-fg-primary">384</span>
-          {" · "}index <span className="text-fg-primary">HNSW · m=16</span>
-        </span>
-        <span className="text-fg-secondary/70">qdrant.tech / cloud</span>
+      <footer className="flex items-center justify-between px-10 py-3 text-[11px] text-fg-secondary/60">
+        <span className="font-mono">POST /collections/movies/points/search</span>
+        <span>qdrant.tech/cloud</span>
       </footer>
     </div>
   );
 }
 
-/* ── sub-components ─────────────────────────────────────── */
+/* ── pieces ── */
 
-function Stat({ label, value, highlight = false }: { label: string; value: string; highlight?: boolean }) {
-  return (
-    <span className="flex items-baseline gap-1.5">
-      <span className="text-fg-secondary/80">{label}</span>
-      <span className={highlight ? "text-qdrant-red text-base" : "text-fg-primary"}>{value}</span>
-    </span>
-  );
-}
+const STEPS: Array<{ key: string; label: string; phases: Phase[] }> = [
+  { key: "text", label: "Ask", phases: ["typing"] },
+  { key: "embed", label: "Embed", phases: ["encoding"] },
+  { key: "search", label: "Search", phases: ["walking"] },
+  { key: "rank", label: "Answer", phases: ["results", "hold"] },
+];
 
-function PipelineOverlay({
-  latest,
-  phase,
-}: {
-  latest: { clientMs: number; serverMs: number; embedMs: number; ef: number; nodesVisited: number; hits: SearchHit[] } | null;
-  phase: Phase;
-}) {
-  const returnMs = latest ? Math.max(0, Math.round(latest.clientMs - latest.embedMs - latest.serverMs)) : 0;
-  const stage = phase === "encoding" ? 0 : phase === "walking" ? 1 : phase === "results" || phase === "hold" ? 2 : -1;
+/** Always-visible pipeline stepper — shows where we are in the process. */
+function StepRail({ phase }: { phase: Phase }) {
+  const activeIdx = STEPS.findIndex((s) => s.phases.includes(phase));
   return (
-    <div className="absolute bottom-3 left-3 right-3 rounded-lg border border-line/50 bg-bg-base/80 backdrop-blur-md">
-      <div className="flex items-stretch">
-        <Step label="encode" detail="MiniLM · 384-d" value={latest && stage >= 0 ? `${latest.embedMs}ms` : "—"} color="#6047FF" active={stage === 0} done={stage > 0} />
-        <Arrow />
-        <Step label="HNSW walk" detail={latest ? `ef=${latest.ef} · touched ${latest.nodesVisited}` : ""} value={latest && stage >= 1 ? `${latest.serverMs}ms` : "—"} color="#DC244C" active={stage === 1} done={stage > 1} />
-        <Arrow />
-        <Step label="return" detail={latest ? `${latest.hits.length} hits` : ""} value={latest && stage >= 2 ? `${returnMs}ms` : "—"} color="#009688" active={stage === 2} done={false} />
-      </div>
-    </div>
-  );
-}
-
-function Step({ label, detail, value, color, active, done }: {
-  label: string; detail: string; value: string; color: string; active: boolean; done: boolean;
-}) {
-  return (
-    <div className={`flex-1 px-4 py-2.5 transition-opacity ${active || done ? "opacity-100" : "opacity-35"}`}>
-      <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-widest text-fg-secondary">
-        <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: color, boxShadow: active ? `0 0 10px ${color}` : "none" }} />
-        {label}
-        {active && <span className="text-qdrant-red">●</span>}
-      </div>
-      <div className="flex items-baseline gap-2 mt-0.5">
-        <span className="font-semibold tracking-tight-brand text-fg-primary" style={{ fontSize: "1.3rem", lineHeight: 1 }}>{value}</span>
-        <span className="font-mono text-[10px] text-fg-secondary truncate">{detail}</span>
-      </div>
-    </div>
-  );
-}
-
-function Arrow() {
-  return (
-    <div className="flex items-center px-1 text-fg-secondary/60">
-      <svg width="18" height="10" viewBox="0 0 18 10" fill="none">
-        <path d="M0 5 L14 5 M10 1 L14 5 L10 9" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
-    </div>
-  );
-}
-
-function ParamsPanel({ ef, efCycle, latest, totalVectors }: {
-  ef: number; efCycle: readonly number[];
-  latest: { nodesVisited: number } | null;
-  totalVectors: number;
-}) {
-  const pct = latest && totalVectors ? ((latest.nodesVisited / totalVectors) * 100).toFixed(1) : null;
-  return (
-    <section className="rounded-xl border border-line/60 bg-bg-elev1/50 p-4">
-      <div className="font-mono text-[10px] uppercase tracking-widest text-fg-secondary">parameter · ef_search</div>
-      <div className="text-sm text-fg-primary mb-3">candidate list size during the walk</div>
-      <div className="font-sans font-semibold tracking-tight-brand text-qdrant-red mb-3" style={{ fontSize: "2.6rem", lineHeight: 1 }}>{ef}</div>
-      <div className="flex items-center gap-1.5 mb-3">
-        {efCycle.map((v) => (
-          <span key={v} className={`flex-1 rounded-md border py-1 text-center font-mono text-xs ${v === ef ? "border-qdrant-red bg-qdrant-red/20 text-fg-primary" : "border-line/40 text-fg-secondary"}`}>{v}</span>
-        ))}
-      </div>
-      <div className="rounded-md border border-line/40 bg-bg-base/50 p-2.5 space-y-1.5 font-mono text-[10px] uppercase tracking-widest text-fg-secondary">
-        <div className="flex justify-between"><span>speed</span><Bar level={ef <= 16 ? 5 : ef <= 64 ? 4 : ef <= 128 ? 3 : 2} /></div>
-        <div className="flex justify-between"><span>recall</span><Bar level={ef <= 16 ? 2 : ef <= 64 ? 3 : ef <= 128 ? 4 : 5} accent /></div>
-        {pct && (
-          <div className="pt-1.5 border-t border-line/30 flex justify-between">
-            <span>collection touched</span><span className="text-fg-primary">{pct}%</span>
+    <div className="flex items-center gap-1 rounded-full card-glass-strong px-2 py-1.5">
+      {STEPS.map((s, i) => {
+        const active = i === activeIdx;
+        const done = activeIdx > i;
+        return (
+          <div key={s.key} className="flex items-center">
+            <span
+              className={`rounded-full px-3.5 py-1 text-xs font-medium transition-all duration-300 ${
+                active
+                  ? "bg-qdrant-red text-white shadow-glow"
+                  : done
+                    ? "text-fg-primary/80"
+                    : "text-fg-secondary/50"
+              }`}
+            >
+              {s.label}
+            </span>
+            {i < STEPS.length - 1 && (
+              <span className={`mx-0.5 text-[10px] ${done ? "text-fg-primary/60" : "text-fg-secondary/30"}`}>→</span>
+            )}
           </div>
-        )}
-      </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function SetupRow({ label, children, wide = false }: { label: string; children: React.ReactNode; wide?: boolean }) {
+  return (
+    <div className={wide ? "col-span-2" : ""}>
+      <div className="mb-1.5 text-[11px] font-medium tracking-wide text-fg-secondary">{label}</div>
+      <div className="flex items-center gap-1 flex-wrap">{children}</div>
+    </div>
+  );
+}
+
+function EfPill({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`rounded-full px-2.5 py-[3px] text-[11px] font-medium transition-all ${
+        active ? "bg-qdrant-red text-white" : "bg-white/[0.05] text-fg-secondary hover:text-fg-primary"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+/** The real query vector painted as 64 sampled color strips. */
+function VectorStrip({ vector }: { vector: number[] }) {
+  const cells = useMemo(() => {
+    const n = 64;
+    return Array.from({ length: n }, (_, i) => vector[Math.floor((i / n) * vector.length)] ?? 0);
+  }, [vector]);
+  return (
+    <div className="flex h-16 w-full max-w-[720px] gap-[3px] items-end">
+      {cells.map((v, i) => {
+        const t = Math.max(0, Math.min(1, (v + 0.25) * 2)); // roughly normalize
+        return (
+          <motion.div
+            key={i}
+            initial={{ scaleY: 0 }}
+            animate={{ scaleY: 1 }}
+            transition={{ duration: 0.3, delay: i * 0.012 }}
+            className="flex-1 rounded-sm origin-bottom"
+            style={{
+              height: `${20 + t * 80}%`,
+              background: `linear-gradient(180deg, ${t > 0.6 ? "#DC244C" : "#6047FF"}, rgba(96,71,255,0.25))`,
+            }}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`rounded-full px-5 py-1.5 text-sm font-medium transition-all ${
+        active ? "bg-fg-primary text-bg-base" : "text-fg-secondary hover:text-fg-primary"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function InsideCard({ title, lead, children }: { title: string; lead: string; children: React.ReactNode }) {
+  return (
+    <section className="card p-7 transition-shadow hover:shadow-glow-violet/20 ring-1 ring-transparent hover:ring-white/[0.06]">
+      <h3 className="text-xl font-semibold tracking-tight-brand text-fg-primary">{title}</h3>
+      <p className="mt-1.5 text-sm leading-relaxed text-fg-secondary max-w-[56ch]">{lead}</p>
+      {children}
     </section>
   );
 }
 
-function Bar({ level, accent = false }: { level: number; accent?: boolean }) {
+function KV({ k, v, dot, accent = false, tip }: { k: string; v: string; dot?: string; accent?: boolean; tip?: string }) {
   return (
-    <span className="flex gap-0.5">
-      {[1, 2, 3, 4, 5].map((i) => (
-        <span key={i} className="h-2 w-2 rounded-sm" style={{ background: i <= level ? (accent ? "#6047FF" : "#DC244C") : "rgba(78,83,102,0.35)" }} />
-      ))}
-    </span>
-  );
-}
-
-/** Layered HNSW diagram — path animates only while `active`. */
-function HNSWInset({ active, ef, latest, totalVectors }: {
-  active: boolean; ef: number;
-  latest: { nodesVisited: number } | null;
-  totalVectors: number;
-}) {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const startRef = useRef(0);
-  useEffect(() => { if (active) startRef.current = performance.now(); }, [active]);
-  const activeRef = useRef(active);
-  useEffect(() => { activeRef.current = active; }, [active]);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const resize = () => {
-      canvas.width = canvas.clientWidth * dpr;
-      canvas.height = canvas.clientHeight * dpr;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    };
-    resize();
-    window.addEventListener("resize", resize);
-    const layers = [4, 12, 40, 120];
-    const labels = ["L3 · ENTRY", "L2", "L1", "L0 · ALL"];
-    let raf = 0;
-    const draw = () => {
-      const w = canvas.clientWidth, h = canvas.clientHeight;
-      ctx.clearRect(0, 0, w, h);
-      const padY = 26, padX = 18;
-      const lh = (h - padY * 2) / layers.length;
-      const nodesPer: Array<Array<{ x: number; y: number }>> = layers.map((count, li) => {
-        const y = padY + li * lh + lh / 2;
-        const step = (w - padX * 2) / (count - 1 || 1);
-        return Array.from({ length: count }, (_, n) => ({ x: padX + n * step, y }));
-      });
-      // Cross-layer edges
-      ctx.strokeStyle = "rgba(78,83,102,0.18)";
-      ctx.lineWidth = 0.7;
-      for (let li = 1; li < nodesPer.length; li++) {
-        for (const up of nodesPer[li - 1]) {
-          const near = nodesPer[li].reduce((b, c) => Math.abs(c.x - up.x) < Math.abs(b.x - up.x) ? c : b);
-          ctx.beginPath(); ctx.moveTo(up.x, up.y); ctx.lineTo(near.x, near.y); ctx.stroke();
-        }
-      }
-      // Nodes + labels
-      ctx.font = '9px "Geist Mono", monospace';
-      ctx.fillStyle = "rgba(101,107,127,0.9)";
-      labels.forEach((lb, li) => ctx.fillText(lb, 3, padY + li * lh + 6));
-      for (const row of nodesPer) for (const n of row) {
-        ctx.fillStyle = "#4E5366";
-        ctx.beginPath(); ctx.arc(n.x, n.y, 1.8, 0, Math.PI * 2); ctx.fill();
-      }
-      // Animated descent path
-      if (activeRef.current || performance.now() - startRef.current < 5000) {
-        const anim = Math.min(1, (performance.now() - startRef.current) / 1800);
-        const hopsPerLayer = Math.max(1, Math.round(1 + Math.log2(ef) / 2.5));
-        const pts: Array<{ x: number; y: number }> = [];
-        for (let li = 0; li < layers.length; li++) {
-          const y = padY + li * lh + lh / 2;
-          const t = li / (layers.length - 1);
-          const xb = w * (0.72 - 0.4 * t);
-          for (let k = 0; k < hopsPerLayer; k++) pts.push({ x: xb + (k - hopsPerLayer / 2) * 13, y });
-        }
-        const drawn = Math.max(2, Math.floor(pts.length * anim));
-        ctx.strokeStyle = "#DC244C"; ctx.lineWidth = 1.4; ctx.setLineDash([3, 2]);
-        ctx.beginPath();
-        for (let i = 0; i < drawn; i++) i === 0 ? ctx.moveTo(pts[i].x, pts[i].y) : ctx.lineTo(pts[i].x, pts[i].y);
-        ctx.stroke(); ctx.setLineDash([]);
-        for (let i = 0; i < drawn; i++) {
-          ctx.fillStyle = "#DC244C";
-          ctx.beginPath(); ctx.arc(pts[i].x, pts[i].y, 2.2, 0, Math.PI * 2); ctx.fill();
-        }
-        const head = pts[drawn - 1];
-        ctx.fillStyle = "#fff";
-        ctx.beginPath(); ctx.arc(head.x, head.y, 3.2, 0, Math.PI * 2); ctx.fill();
-      }
-      raf = requestAnimationFrame(draw);
-    };
-    draw();
-    return () => { window.removeEventListener("resize", resize); cancelAnimationFrame(raf); };
-  }, [ef]);
-
-  return (
-    <section className="rounded-xl border border-line/60 bg-bg-elev1/50 p-3">
-      <div className="flex items-baseline justify-between mb-1">
-        <div>
-          <div className="font-mono text-[10px] uppercase tracking-widest text-fg-secondary">HNSW index</div>
-          <div className="text-sm text-fg-primary">layered graph descent</div>
-        </div>
-        {latest && (
-          <div className="text-right font-mono text-[10px] uppercase tracking-widest text-fg-secondary">
-            <div>visited <span className="text-qdrant-red">{latest.nodesVisited}</span></div>
-            <div className="text-fg-primary/70">{((latest.nodesVisited / Math.max(totalVectors, 1)) * 100).toFixed(1)}% of {totalVectors.toLocaleString()}</div>
-          </div>
-        )}
+    <div className={`relative rounded-lg bg-white/[0.03] ring-1 ring-white/[0.05] px-3 py-2 ${tip ? "group cursor-help" : ""}`}>
+      <div className="text-[10px] tracking-wide text-fg-secondary/70">{k}</div>
+      <div className={`mt-0.5 text-base font-medium tracking-tight-brand ${accent ? "text-qdrant-red" : "text-fg-primary"}`}>
+        {dot && <span className="inline-block h-2 w-2 rounded-full mr-1.5" style={{ background: dot }} />}
+        {v}
       </div>
-      <canvas ref={canvasRef} className="w-full" style={{ height: 190 }} />
-    </section>
-  );
-}
-
-function QueryLog({ entries, error }: { entries: LogEntry[]; error: string | null }) {
-  return (
-    <section className="flex flex-col rounded-xl border border-line/60 bg-bg-elev1/50 overflow-hidden flex-1 min-h-0">
-      <div className="border-b border-line/40 px-3 py-2">
-        <div className="font-mono text-[10px] uppercase tracking-widest text-fg-secondary">query history</div>
-      </div>
-      {error && (
-        <div className="mx-2 mt-2 max-h-[120px] overflow-auto rounded-md border border-qdrant-red/40 bg-qdrant-red/5 px-2 py-1.5">
-          <div className="font-mono text-[10px] uppercase tracking-widest text-qdrant-red">error</div>
-          <div className="break-all text-[10px] text-fg-primary/90 whitespace-pre-wrap font-mono">{error}</div>
+      {tip && (
+        <div className="pointer-events-none absolute bottom-full left-1/2 z-30 mb-2 hidden w-56 -translate-x-1/2 rounded-xl card-glass-strong px-3 py-2 text-[11px] leading-relaxed text-fg-primary/90 group-hover:block">
+          {tip}
         </div>
       )}
-      <div className="flex-1 min-h-0 overflow-hidden px-2 py-2">
-        <AnimatePresence initial={false}>
-          {entries.map((e) => (
-            <motion.div key={e.id} layout initial={{ opacity: 0, x: -8, height: 0 }} animate={{ opacity: 1, x: 0, height: "auto" }} exit={{ opacity: 0 }} transition={{ duration: 0.22 }}
-              className="mb-1 rounded-md border border-line/40 bg-bg-elev1/70 px-2 py-1">
-              <div className="flex justify-between font-mono text-[9px] uppercase tracking-widest text-fg-secondary">
-                <span>{e.ts}</span>
-                <span className="flex items-center gap-1.5">
-                  <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: GENRE_COLOR[e.primaryGenre] ?? "#DC244C" }} />
-                  ef={e.ef} · {e.latencyMs}ms
-                </span>
-              </div>
-              <div className="truncate text-xs text-fg-primary">&ldquo;{e.text}&rdquo;</div>
-            </motion.div>
-          ))}
-        </AnimatePresence>
-      </div>
-    </section>
-  );
-}
-
-function MetricsPanel({ stats }: { stats: { p50: number | null; p95: number | null; latencies: number[] } }) {
-  return (
-    <section className="rounded-xl border border-line/60 bg-bg-elev1/50 p-3">
-      <div className="grid grid-cols-2 gap-2 mb-2">
-        <Tile label="p50" value={stats.p50 != null ? `${stats.p50}ms` : "—"} />
-        <Tile label="p95" value={stats.p95 != null ? `${stats.p95}ms` : "—"} />
-      </div>
-      <div className="rounded-lg border border-line/40 bg-bg-base/60 p-2">
-        <div className="mb-1 font-mono text-[10px] uppercase tracking-widest text-fg-secondary">latency</div>
-        <Sparkline values={stats.latencies} color="#DC244C" />
-      </div>
-    </section>
-  );
-}
-
-function Tile({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-md border border-line/40 bg-bg-base/60 px-2 py-1.5">
-      <div className="font-mono text-[9px] uppercase tracking-widest text-fg-secondary">{label}</div>
-      <div className="mt-0.5 font-semibold tracking-tight-brand text-fg-primary text-lg leading-none">{value}</div>
     </div>
+  );
+}
+
+function ResultCard({ hit, rank, euclid = false }: { hit: SearchHit; rank: number; euclid?: boolean }) {
+  const hue = hit.payload.hue ?? 220;
+  // Euclidean scores are distances (lower is better) — show raw, not %.
+  const scoreLabel = euclid ? hit.score.toFixed(2) : `${Math.round(hit.score * 100)}%`;
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 16 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.35, delay: rank * 0.09 }}
+      className="relative h-[118px] overflow-hidden rounded-2xl"
+      style={{ background: `linear-gradient(140deg, hsl(${hue},60%,30%) 0%, hsl(${(hue + 30) % 360},50%,12%) 100%)` }}
+    >
+      <div aria-hidden className="absolute inset-0" style={{ background: `radial-gradient(circle at 22% 18%, hsla(${hue},85%,70%,0.35) 0%, transparent 55%)` }} />
+      <div aria-hidden className="absolute inset-x-0 bottom-0 h-2/3" style={{ background: "linear-gradient(to top, rgba(11,15,25,0.9), transparent)" }} />
+      <div className="absolute left-2.5 top-2.5 rounded-full bg-black/45 px-2 py-0.5 text-[10px] font-semibold text-white/95 backdrop-blur">
+        #{rank + 1}
+      </div>
+      <div className="absolute right-2.5 top-2.5 rounded-full bg-black/45 px-2 py-0.5 text-[10px] font-medium text-white/95 backdrop-blur">
+        {scoreLabel}
+      </div>
+      <div className="absolute inset-x-0 bottom-0 p-3">
+        <div className="text-[13px] font-semibold leading-tight tracking-tight-brand text-white line-clamp-2">{hit.payload.title}</div>
+        <div className="mt-1 text-[10px] text-white/65">{hit.payload.genres[0]} · {hit.payload.year}</div>
+      </div>
+    </motion.div>
   );
 }
 
@@ -746,33 +1110,14 @@ function Sparkline({ values, color }: { values: number[]; color: string }) {
     ctx.lineTo(w, h); ctx.closePath();
     ctx.fillStyle = `${color}22`; ctx.fill();
     ctx.beginPath();
-    values.forEach((v, i) => { const y = h - ((v - min) / (max - min)) * (h - 4) - 2; i === 0 ? ctx.moveTo(0, y) : ctx.lineTo(i * sx, y); });
+    values.forEach((v, i) => {
+      const y = h - ((v - min) / (max - min)) * (h - 4) - 2;
+      i === 0 ? ctx.moveTo(0, y) : ctx.lineTo(i * sx, y);
+    });
     ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.stroke();
   }, [values, color]);
-  return <canvas ref={ref} className="w-full" style={{ height: 36 }} />;
+  return <canvas ref={ref} className="w-full" style={{ height: 48 }} />;
 }
-
-function ResultCard({ hit, rank }: { hit: SearchHit; rank: number }) {
-  const color = GENRE_COLOR[hit.payload.genres[0]] ?? "#DC244C";
-  const hue = hit.payload.hue ?? 220;
-  return (
-    <motion.div layout initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.3, delay: rank * 0.12 }}
-      className="relative h-[100px] overflow-hidden rounded-md border border-line/50"
-      style={{ background: `linear-gradient(135deg, hsl(${hue},65%,32%) 0%, hsl(${(hue + 30) % 360},55%,14%) 100%)` }}>
-      <div aria-hidden className="absolute inset-x-0 bottom-0 h-2/3" style={{ background: "linear-gradient(to top, rgba(11,15,25,0.85), transparent)" }} />
-      <div className="absolute left-1.5 top-1.5 font-mono text-[9px] text-white/85">#{rank + 1}</div>
-      <div className="absolute right-1.5 top-1.5 rounded-full bg-black/50 px-1.5 py-0.5 font-mono text-[9px] text-white/95">
-        <span style={{ color }}>●</span> {Math.round(hit.score * 100)}%
-      </div>
-      <div className="absolute inset-x-0 bottom-0 p-2">
-        <div className="text-[11px] font-semibold leading-tight text-white line-clamp-2">{hit.payload.title}</div>
-        <div className="mt-0.5 font-mono text-[9px] uppercase tracking-widest text-white/70">{hit.payload.genres[0]} · {hit.payload.year}</div>
-      </div>
-    </motion.div>
-  );
-}
-
-/* ── helpers ────────────────────────────────────────────── */
 
 function simulatePath(target: Point, ef: number, points: Point[]): Array<{ x: number; y: number }> {
   const hops = Math.min(20, Math.max(6, Math.round(Math.log2(ef) + 5)));

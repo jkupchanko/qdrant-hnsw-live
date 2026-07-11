@@ -16,7 +16,14 @@
       "Bash('C:/Users/Home Laptop/my-project/.venv/Scripts/python.exe' -c ' *)",
       "Bash(curl -s -H 'api-key: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2Nlc3MiOiJtIiwic3ViamVjdCI6ImFwaS1rZXk6ZTRjNDlkMDEtNTEyYS00NjJjLTk0N2EtNmRkMDc2MDBlNThmIn0.rrcSK7ijl8vBCPOl77O01keqE3CzyzomrAPghCFXAj8' https://ca9d6867-c3fa-48f5-bb3d-a81052fe20eb.eu-west-2-0.aws.cloud.qdrant.io/collections/movies)",
       "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('  ', d.get\\('status',d\\)\\)\")",
-      "Bash(git config *)"
+      "Bash(git config *)",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('OK:', d['html_url']\\) if d.get\\('html_url'\\) else print\\('ERROR:', d.get\\('message'\\), '|', d.get\\('errors', ''\\)\\)\")",
+      "Bash('/c/Program Files/GitHub CLI/gh.exe' auth status)",
+      "Bash(find \"/c/Users/Home Laptop/AppData\" -maxdepth 4 -name \"hosts.yml\" 2>/dev/null | head -5 *)",
+      "Bash(npm run *)",
+      "Bash(npm install *)",
+      "Bash(npm ls *)",
+      "Bash(npx tsc *)"
     ]
   }
 }

@@ -8,9 +8,14 @@ interface Body {
   vector: number[];
   limit?: number;
   ef?: number;
+  exact?: boolean;
+  variant?: string;
+  scoreThreshold?: number;
   filter?: {
     genre?: string;
     mood?: string;
+    yearFrom?: number;
+    yearTo?: number;
   };
 }
 
@@ -29,15 +34,23 @@ export async function POST(req: Request) {
   }
   const limit = Math.min(Math.max(body.limit ?? 6, 1), 20);
 
-  const must = [] as Array<{ key: string; match: { value: string } }>;
+  const must = [] as Array<
+    { key: string; match: { value: string } } | { key: string; range: { gte?: number; lte?: number } }
+  >;
   if (body.filter?.genre) must.push({ key: "genres", match: { value: body.filter.genre } });
   if (body.filter?.mood) must.push({ key: "mood", match: { value: body.filter.mood } });
+  if (body.filter?.yearFrom != null || body.filter?.yearTo != null) {
+    must.push({ key: "year", range: { gte: body.filter?.yearFrom, lte: body.filter?.yearTo } });
+  }
 
   try {
     const { points, timeMs } = await searchByVector({
       vector: body.vector,
       limit,
       ef: body.ef,
+      exact: body.exact,
+      variant: body.variant,
+      scoreThreshold: body.scoreThreshold,
       filter: must.length ? { must } : undefined,
     });
     const hits: SearchHit[] = points.map((p) => ({
