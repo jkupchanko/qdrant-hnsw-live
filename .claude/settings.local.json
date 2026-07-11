@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls '/c/Users/Home Laptop/.claude/projects/C--Users-Home-Laptop-my-project/memory/' 2>&1)",
+      "Bash(mkdir -p \"C:/Users/Home Laptop/.claude/projects/C--Users-Home-Laptop-my-project/memory\")",
+      "Bash(\"C:/Users/Home Laptop/my-project/.venv/Scripts/python.exe\" \"C:/Users/Home Laptop/my-project/scripts/ingest.py\")",
+      "Bash(curl -s -H \"api-key: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2Nlc3MiOiJtIiwic3ViamVjdCI6ImFwaS1rZXk6ZTRjNDlkMDEtNTEyYS00NjJjLTk0N2EtNmRkMDc2MDBlNThmIn0.rrcSK7ijl8vBCPOl77O01keqE3CzyzomrAPghCFXAj8\" \"https://ca9d6867-c3fa-48f5-bb3d-a81052fe20eb.eu-west-2-0.aws.cloud.qdrant.io/collections/constellations\")",
+      "Bash(python -c \"import json; print\\(json.dumps\\([0.05]*384\\)\\)\")",
+      "Bash(curl -s -X POST -H 'api-key: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2Nlc3MiOiJtIiwic3ViamVjdCI6ImFwaS1rZXk6ZTRjNDlkMDEtNTEyYS00NjJjLTk0N2EtNmRkMDc2MDBlNThmIn0.rrcSK7ijl8vBCPOl77O01keqE3CzyzomrAPghCFXAj8' -H 'content-type: application/json' https://ca9d6867-c3fa-48f5-bb3d-a81052fe20eb.eu-west-2-0.aws.cloud.qdrant.io/collections/constellations/points/search -d '{\"vector\": __CMDSUB_OUTPUT__, \"limit\": 2, \"with_payload\": true}')",
+      "Bash(curl -s -X POST -H 'api-key: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2Nlc3MiOiJtIiwic3ViamVjdCI6ImFwaS1rZXk6ZTRjNDlkMDEtNTEyYS00NjJjLTk0N2EtNmRkMDc2MDBlNThmIn0.rrcSK7ijl8vBCPOl77O01keqE3CzyzomrAPghCFXAj8' -H 'content-type: application/json' https://ca9d6867-c3fa-48f5-bb3d-a81052fe20eb.eu-west-2-0.aws.cloud.qdrant.io/collections/constellations/points/search -d '{\"vector\": __CMDSUB_OUTPUT__, \"limit\": 3, \"with_payload\": true, \"filter\": {\"must\": [{\"key\": \"mythology\", \"match\": {\"value\": \"Polynesian\"}}]}}')",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('hits:', len\\(d.get\\('result',[]\\)\\)\\); [print\\(' ', p['payload']['name'], '·', p['payload']['mythology']\\) for p in d.get\\('result',[]\\)]\")",
+      "Bash(rm -rf components/scenes)",
+      "Bash(rm -f components/Carousel.tsx components/ProgressBar.tsx components/LiveDemo.tsx components/LiveMap.tsx lib/mythology.ts)",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('SEED: In the Mood for Love'\\); [print\\(f\\\\\"  {p['score']:.2f}  {p['payload']['title']} \\({p['payload']['year']}\\)  ·  {'/'.join\\(p['payload']['genres']\\)}\\\\\"\\) for p in d.get\\('result',[]\\)]\")",
+      "Bash(\"C:/Users/Home Laptop/my-project/.venv/Scripts/python.exe\" \"C:/Users/Home Laptop/my-project/scripts/generate_movies.py\")",
+      "Bash('C:/Users/Home Laptop/my-project/.venv/Scripts/python.exe' -c ' *)",
+      "Bash(curl -s -H 'api-key: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2Nlc3MiOiJtIiwic3ViamVjdCI6ImFwaS1rZXk6ZTRjNDlkMDEtNTEyYS00NjJjLTk0N2EtNmRkMDc2MDBlNThmIn0.rrcSK7ijl8vBCPOl77O01keqE3CzyzomrAPghCFXAj8' https://ca9d6867-c3fa-48f5-bb3d-a81052fe20eb.eu-west-2-0.aws.cloud.qdrant.io/collections/movies)",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('  ', d.get\\('status',d\\)\\)\")",
+      "Bash(git config *)"
+    ]
+  }
+}

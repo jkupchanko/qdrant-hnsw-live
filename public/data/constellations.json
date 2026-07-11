@@ -1,0 +1,1018 @@
+[
+  {
+    "id": 1,
+    "name": "Orion",
+    "mythology": "Greek",
+    "hemisphere": "Both",
+    "season": "Winter",
+    "brightest_star": "Rigel",
+    "tags": [
+      "hunter",
+      "warrior",
+      "belt",
+      "iconic"
+    ],
+    "description": "A giant hunter of unmatched strength, boastful enough to claim he could kill every beast on Earth. The gods sent a scorpion; both were lifted to the sky, kept forever on opposite sides so they could never meet again.",
+    "x": -0.1679740697145462,
+    "y": -0.1117638573050499
+  },
+  {
+    "id": 2,
+    "name": "Ursa Major",
+    "mythology": "Greek",
+    "hemisphere": "Northern",
+    "season": "Spring",
+    "brightest_star": "Alioth",
+    "tags": [
+      "bear",
+      "circumpolar",
+      "great bear",
+      "dipper"
+    ],
+    "description": "The Great Bear. Callisto, a nymph loved by Zeus, was transformed into a bear by his jealous wife. Her son nearly killed her while hunting, so Zeus flung them both into the heavens by their tails.",
+    "x": -0.28551948070526123,
+    "y": -0.3287869393825531
+  },
+  {
+    "id": 3,
+    "name": "Ursa Minor",
+    "mythology": "Greek",
+    "hemisphere": "Northern",
+    "season": "All",
+    "brightest_star": "Polaris",
+    "tags": [
+      "bear",
+      "polar",
+      "little dipper",
+      "pole star"
+    ],
+    "description": "The Little Bear, anchored by Polaris — the star that does not move. For centuries, sailors and caravan drivers steered by this single point of stillness in a turning sky.",
+    "x": 0.24486787617206573,
+    "y": -0.05820658802986145
+  },
+  {
+    "id": 4,
+    "name": "Cassiopeia",
+    "mythology": "Greek",
+    "hemisphere": "Northern",
+    "season": "Autumn",
+    "brightest_star": "Schedar",
+    "tags": [
+      "queen",
+      "vanity",
+      "chained",
+      "w-shape"
+    ],
+    "description": "A queen so vain she boasted her beauty surpassed the sea nymphs. Poseidon chained her to a throne in the sky, condemning her to circle the pole forever, half the year hanging upside down.",
+    "x": -0.6107558012008667,
+    "y": 0.3884240984916687
+  },
+  {
+    "id": 5,
+    "name": "Cepheus",
+    "mythology": "Greek",
+    "hemisphere": "Northern",
+    "season": "Autumn",
+    "brightest_star": "Alderamin",
+    "tags": [
+      "king",
+      "father",
+      "husband"
+    ],
+    "description": "King of Aethiopia, husband to Cassiopeia. When Poseidon's sea monster came for their kingdom, he offered his daughter Andromeda as sacrifice — a father broken by the price of his wife's pride.",
+    "x": -0.7806228995323181,
+    "y": 0.4743514657020569
+  },
+  {
+    "id": 6,
+    "name": "Andromeda",
+    "mythology": "Greek",
+    "hemisphere": "Northern",
+    "season": "Autumn",
+    "brightest_star": "Alpheratz",
+    "tags": [
+      "chained",
+      "maiden",
+      "rescued",
+      "princess"
+    ],
+    "description": "Chained to a coastal rock as sacrifice to a sea monster. Perseus, flying home with Medusa's severed head, saw her and dove — freeing her, marrying her, and joining her among the stars.",
+    "x": -0.8792660236358643,
+    "y": 0.30438169836997986
+  },
+  {
+    "id": 7,
+    "name": "Perseus",
+    "mythology": "Greek",
+    "hemisphere": "Northern",
+    "season": "Autumn",
+    "brightest_star": "Mirfak",
+    "tags": [
+      "hero",
+      "rescuer",
+      "medusa",
+      "winged sandals"
+    ],
+    "description": "The hero who beheaded Medusa without meeting her petrifying gaze, using a polished shield as a mirror. He carried her head like a weapon and rescued Andromeda mid-flight.",
+    "x": -0.6377782225608826,
+    "y": 0.13412438333034515
+  },
+  {
+    "id": 8,
+    "name": "Pegasus",
+    "mythology": "Greek",
+    "hemisphere": "Northern",
+    "season": "Autumn",
+    "brightest_star": "Enif",
+    "tags": [
+      "winged horse",
+      "flying",
+      "great square"
+    ],
+    "description": "The winged horse born from Medusa's blood when Perseus struck her down. A creature born of monstrous death, yet gentle enough to carry heroes across the sky.",
+    "x": -0.4533800184726715,
+    "y": -0.17141951620578766
+  },
+  {
+    "id": 9,
+    "name": "Cetus",
+    "mythology": "Greek",
+    "hemisphere": "Southern",
+    "season": "Autumn",
+    "brightest_star": "Diphda",
+    "tags": [
+      "sea monster",
+      "whale",
+      "villain"
+    ],
+    "description": "The sea monster sent by Poseidon to devour the coast — and Andromeda with it. Perseus turned it to stone with Medusa's head, and its enormous body was laid across the southern sky.",
+    "x": -0.7792282104492188,
+    "y": 0.15406015515327454
+  },
+  {
+    "id": 10,
+    "name": "Draco",
+    "mythology": "Greek",
+    "hemisphere": "Northern",
+    "season": "Summer",
+    "brightest_star": "Eltanin",
+    "tags": [
+      "dragon",
+      "guardian",
+      "serpent"
+    ],
+    "description": "The dragon Ladon, guardian of the golden apples of the Hesperides. Hercules slew it as his eleventh labor; Hera, who had raised it from birth, set it in the sky to honor its faithfulness.",
+    "x": -0.27280673384666443,
+    "y": -0.7860442996025085
+  },
+  {
+    "id": 11,
+    "name": "Hercules",
+    "mythology": "Greek",
+    "hemisphere": "Northern",
+    "season": "Summer",
+    "brightest_star": "Kornephoros",
+    "tags": [
+      "hero",
+      "labors",
+      "strength",
+      "kneeling"
+    ],
+    "description": "The strongest of mortals, cursed to complete twelve impossible labors as penance. He is drawn kneeling in the sky — even the greatest hero, eventually, must rest.",
+    "x": -0.6284108757972717,
+    "y": -0.28541964292526245
+  },
+  {
+    "id": 12,
+    "name": "Leo",
+    "mythology": "Greek",
+    "hemisphere": "Both",
+    "season": "Spring",
+    "brightest_star": "Regulus",
+    "tags": [
+      "lion",
+      "zodiac",
+      "hercules",
+      "fixed"
+    ],
+    "description": "The Nemean lion, whose golden hide could not be pierced by any weapon. Hercules strangled it with bare arms and wore its skin as armor. Zeus placed the lion in the sky to honor the fight.",
+    "x": -0.522295355796814,
+    "y": -0.49542340636253357
+  },
+  {
+    "id": 13,
+    "name": "Cygnus",
+    "mythology": "Greek",
+    "hemisphere": "Northern",
+    "season": "Summer",
+    "brightest_star": "Deneb",
+    "tags": [
+      "swan",
+      "zeus",
+      "flying",
+      "cross"
+    ],
+    "description": "Zeus in disguise as a swan, gliding down to seduce mortal women. Or a grieving friend who mourned so long over a dead companion's body he was transformed into a bird in flight.",
+    "x": -0.44114169478416443,
+    "y": -0.09228263050317764
+  },
+  {
+    "id": 14,
+    "name": "Lyra",
+    "mythology": "Greek",
+    "hemisphere": "Northern",
+    "season": "Summer",
+    "brightest_star": "Vega",
+    "tags": [
+      "lyre",
+      "music",
+      "orpheus",
+      "grief"
+    ],
+    "description": "The lyre of Orpheus, whose music could quiet wild beasts and soften the god of the dead. When he lost his wife twice, he cast the instrument away — and it was set among the stars.",
+    "x": -0.32637205719947815,
+    "y": 0.31221896409988403
+  },
+  {
+    "id": 15,
+    "name": "Aquila",
+    "mythology": "Greek",
+    "hemisphere": "Both",
+    "season": "Summer",
+    "brightest_star": "Altair",
+    "tags": [
+      "eagle",
+      "zeus",
+      "carrier"
+    ],
+    "description": "The eagle of Zeus, sent to snatch the beautiful mortal Ganymede and carry him to Olympus. It is often shown mid-flight, wings outstretched, with a boy grasped in its talons.",
+    "x": -0.5263676047325134,
+    "y": -0.4240056574344635
+  },
+  {
+    "id": 16,
+    "name": "Sagittarius",
+    "mythology": "Greek",
+    "hemisphere": "Southern",
+    "season": "Summer",
+    "brightest_star": "Kaus Australis",
+    "tags": [
+      "archer",
+      "centaur",
+      "zodiac",
+      "teapot"
+    ],
+    "description": "A centaur drawing back a bow, arrow aimed at the heart of the scorpion beside him. In this quiver of the sky sits the galactic center — every arrow fired toward the middle of the Milky Way.",
+    "x": 0.1745566725730896,
+    "y": -0.0004682324652094394
+  },
+  {
+    "id": 17,
+    "name": "Scorpius",
+    "mythology": "Greek",
+    "hemisphere": "Southern",
+    "season": "Summer",
+    "brightest_star": "Antares",
+    "tags": [
+      "scorpion",
+      "zodiac",
+      "hunter's rival",
+      "curved"
+    ],
+    "description": "The scorpion sent to punish Orion for his boasting. Both were placed in the sky so that as one rises, the other sets — the chase, endless, never resolved.",
+    "x": -0.2188442349433899,
+    "y": -0.13010145723819733
+  },
+  {
+    "id": 18,
+    "name": "Gemini",
+    "mythology": "Greek",
+    "hemisphere": "Northern",
+    "season": "Winter",
+    "brightest_star": "Pollux",
+    "tags": [
+      "twins",
+      "brothers",
+      "zodiac",
+      "castor and pollux"
+    ],
+    "description": "Two brothers, one mortal and one immortal, inseparable in life. When the mortal Castor died, immortal Pollux begged the gods to share his gift — and they were made twin stars, joined forever.",
+    "x": -0.20656901597976685,
+    "y": 0.3921326696872711
+  },
+  {
+    "id": 19,
+    "name": "Taurus",
+    "mythology": "Greek",
+    "hemisphere": "Both",
+    "season": "Winter",
+    "brightest_star": "Aldebaran",
+    "tags": [
+      "bull",
+      "zodiac",
+      "zeus",
+      "seduction"
+    ],
+    "description": "Zeus disguised as a white bull to steal away Europa from a Cretan beach. Only his head and front shoulders appear in the sky — the rest submerged, as if wading through dark water.",
+    "x": -0.4683096408843994,
+    "y": -0.407409131526947
+  },
+  {
+    "id": 20,
+    "name": "Aries",
+    "mythology": "Greek",
+    "hemisphere": "Northern",
+    "season": "Autumn",
+    "brightest_star": "Hamal",
+    "tags": [
+      "ram",
+      "zodiac",
+      "golden fleece"
+    ],
+    "description": "The ram with golden fleece that rescued two children from being sacrificed, carrying them over the sea. Its skin later became the prize Jason and the Argonauts sailed to steal.",
+    "x": -0.47655269503593445,
+    "y": -0.15785421431064606
+  },
+  {
+    "id": 21,
+    "name": "Virgo",
+    "mythology": "Greek",
+    "hemisphere": "Both",
+    "season": "Spring",
+    "brightest_star": "Spica",
+    "tags": [
+      "virgin",
+      "goddess",
+      "zodiac",
+      "justice",
+      "harvest"
+    ],
+    "description": "Astraea, the last of the gods to walk among mortals, goddess of justice and innocence. When human cruelty grew too great to bear, she rose to the heavens and never returned.",
+    "x": -0.5277395248413086,
+    "y": -0.2223341315984726
+  },
+  {
+    "id": 22,
+    "name": "Libra",
+    "mythology": "Greek",
+    "hemisphere": "Both",
+    "season": "Spring",
+    "brightest_star": "Zubeneschamali",
+    "tags": [
+      "scales",
+      "zodiac",
+      "justice",
+      "balance"
+    ],
+    "description": "The scales held by Astraea, weighing the deeds of the living. The only zodiac constellation representing an object rather than a creature — an instrument, patient, indifferent.",
+    "x": -0.21843603253364563,
+    "y": -0.19076591730117798
+  },
+  {
+    "id": 23,
+    "name": "Aquarius",
+    "mythology": "Greek",
+    "hemisphere": "Southern",
+    "season": "Autumn",
+    "brightest_star": "Sadalsuud",
+    "tags": [
+      "water",
+      "cupbearer",
+      "zodiac",
+      "youth"
+    ],
+    "description": "Ganymede, the beautiful mortal boy carried to Olympus by Zeus's eagle to serve as cupbearer of the gods — pouring nectar for eternity, forever young in the sky.",
+    "x": -0.1784849762916565,
+    "y": -0.25551676750183105
+  },
+  {
+    "id": 24,
+    "name": "Pisces",
+    "mythology": "Greek",
+    "hemisphere": "Both",
+    "season": "Autumn",
+    "brightest_star": "Alpherg",
+    "tags": [
+      "fish",
+      "zodiac",
+      "tied together",
+      "aphrodite"
+    ],
+    "description": "Two fish tied together by a cord — Aphrodite and her son Eros, transformed to escape the monster Typhon. Bound so they would not lose each other in the flight.",
+    "x": -0.5849869251251221,
+    "y": 0.134251207113266
+  },
+  {
+    "id": 25,
+    "name": "Cancer",
+    "mythology": "Greek",
+    "hemisphere": "Both",
+    "season": "Spring",
+    "brightest_star": "Tarf",
+    "tags": [
+      "crab",
+      "zodiac",
+      "hercules",
+      "sacrifice"
+    ],
+    "description": "A crab sent by Hera to distract Hercules during his fight with the Hydra. He crushed it with a single stomp; Hera, moved by its loyalty, placed the small creature among the stars.",
+    "x": -0.6651116013526917,
+    "y": -0.3431788682937622
+  },
+  {
+    "id": 26,
+    "name": "Capricornus",
+    "mythology": "Greek",
+    "hemisphere": "Southern",
+    "season": "Autumn",
+    "brightest_star": "Deneb Algedi",
+    "tags": [
+      "goat-fish",
+      "zodiac",
+      "pan",
+      "transformation"
+    ],
+    "description": "The god Pan, fleeing the monster Typhon, dove into a river and transformed mid-leap — his upper half a goat, his lower half a fish. Frozen in the strange moment of his own panic.",
+    "x": -0.42676976323127747,
+    "y": -0.2082090526819229
+  },
+  {
+    "id": 27,
+    "name": "Corona Borealis",
+    "mythology": "Greek",
+    "hemisphere": "Northern",
+    "season": "Summer",
+    "brightest_star": "Alphecca",
+    "tags": [
+      "crown",
+      "ariadne",
+      "gift",
+      "small"
+    ],
+    "description": "The crown of Ariadne, given by the god Dionysus. When she died, he threw it into the sky where its jewels became stars — a small, perfect arc of light.",
+    "x": -0.12226453423500061,
+    "y": -0.012687763199210167
+  },
+  {
+    "id": 28,
+    "name": "Boötes",
+    "mythology": "Greek",
+    "hemisphere": "Northern",
+    "season": "Spring",
+    "brightest_star": "Arcturus",
+    "tags": [
+      "herdsman",
+      "plowman",
+      "kite-shaped"
+    ],
+    "description": "The herdsman driving the Great Bear around the pole with his hunting dogs. Some tales cast him as the inventor of the plow, honored for teaching humans to farm.",
+    "x": 0.11111993342638016,
+    "y": -0.2023407220840454
+  },
+  {
+    "id": 29,
+    "name": "Auriga",
+    "mythology": "Greek",
+    "hemisphere": "Northern",
+    "season": "Winter",
+    "brightest_star": "Capella",
+    "tags": [
+      "charioteer",
+      "goat",
+      "pentagon"
+    ],
+    "description": "A charioteer holding a goat and her kids across his shoulder. Some say he invented the four-horse chariot; others, that he is the lame king Erichthonius, who first raced without walking.",
+    "x": -0.19404324889183044,
+    "y": -0.10908254981040955
+  },
+  {
+    "id": 30,
+    "name": "Delphinus",
+    "mythology": "Greek",
+    "hemisphere": "Northern",
+    "season": "Summer",
+    "brightest_star": "Rotanev",
+    "tags": [
+      "dolphin",
+      "poseidon",
+      "messenger",
+      "small"
+    ],
+    "description": "The dolphin who convinced the sea goddess Amphitrite to marry Poseidon. As reward, Poseidon set the small, quick creature into the sky — a diplomat immortalized.",
+    "x": -0.6881517171859741,
+    "y": 0.2956390976905823
+  },
+  {
+    "id": 31,
+    "name": "Crux",
+    "mythology": "Modern",
+    "hemisphere": "Southern",
+    "season": "Autumn",
+    "brightest_star": "Acrux",
+    "tags": [
+      "cross",
+      "southern cross",
+      "navigation",
+      "compact"
+    ],
+    "description": "The Southern Cross. The smallest of the 88 constellations, yet the most navigationally important below the equator — used by seafarers for centuries to point toward the south pole.",
+    "x": 0.5120271444320679,
+    "y": 0.540347158908844
+  },
+  {
+    "id": 32,
+    "name": "Centaurus",
+    "mythology": "Greek",
+    "hemisphere": "Southern",
+    "season": "Spring",
+    "brightest_star": "Alpha Centauri",
+    "tags": [
+      "centaur",
+      "chiron",
+      "teacher",
+      "wise"
+    ],
+    "description": "The wise centaur Chiron, tutor of heroes — Achilles, Jason, Asclepius. He gave up his own immortality to end an incurable wound, and was raised to the stars in gratitude.",
+    "x": -0.5458987355232239,
+    "y": 0.035761378705501556
+  },
+  {
+    "id": 33,
+    "name": "Carina",
+    "mythology": "Greek",
+    "hemisphere": "Southern",
+    "season": "Winter",
+    "brightest_star": "Canopus",
+    "tags": [
+      "keel",
+      "ship",
+      "argo",
+      "voyage"
+    ],
+    "description": "The keel of the Argo, ship of Jason and the Argonauts on their voyage for the Golden Fleece. The great ship was split into three constellations; the keel is the sturdiest piece.",
+    "x": -0.25948047637939453,
+    "y": 0.6142681837081909
+  },
+  {
+    "id": 34,
+    "name": "Vela",
+    "mythology": "Greek",
+    "hemisphere": "Southern",
+    "season": "Spring",
+    "brightest_star": "Suhail",
+    "tags": [
+      "sails",
+      "ship",
+      "argo",
+      "voyage"
+    ],
+    "description": "The sails of the Argo, catching an eternal wind. Once part of a single vast constellation, later divided so no single ship dominated the southern sky.",
+    "x": 0.06356804817914963,
+    "y": 0.6915350556373596
+  },
+  {
+    "id": 35,
+    "name": "Puppis",
+    "mythology": "Greek",
+    "hemisphere": "Southern",
+    "season": "Winter",
+    "brightest_star": "Naos",
+    "tags": [
+      "stern",
+      "ship",
+      "argo",
+      "voyage"
+    ],
+    "description": "The stern of the Argo, the piece of the great ship that steers. The three-part vessel of Jason and his crew sails silently across the southern hemisphere.",
+    "x": -0.04245780408382416,
+    "y": 0.35612866282463074
+  },
+  {
+    "id": 36,
+    "name": "Pavo",
+    "mythology": "Modern",
+    "hemisphere": "Southern",
+    "season": "Winter",
+    "brightest_star": "Peacock",
+    "tags": [
+      "peacock",
+      "bird",
+      "exotic",
+      "renaissance"
+    ],
+    "description": "A peacock. Charted by Dutch navigators in the sixteenth century as they sailed south, encountering birds no European constellation had yet named.",
+    "x": 0.6469793319702148,
+    "y": 0.35714152455329895
+  },
+  {
+    "id": 37,
+    "name": "Tucana",
+    "mythology": "Modern",
+    "hemisphere": "Southern",
+    "season": "Autumn",
+    "brightest_star": "Alpha Tucanae",
+    "tags": [
+      "toucan",
+      "bird",
+      "exotic",
+      "small magellanic cloud"
+    ],
+    "description": "A toucan, one of many exotic-bird constellations added by Dutch navigators mapping the southern sky. It hosts the Small Magellanic Cloud, a dwarf galaxy visible to the naked eye.",
+    "x": 0.650784432888031,
+    "y": 0.07658231258392334
+  },
+  {
+    "id": 38,
+    "name": "Phoenix",
+    "mythology": "Modern",
+    "hemisphere": "Southern",
+    "season": "Autumn",
+    "brightest_star": "Ankaa",
+    "tags": [
+      "phoenix",
+      "rebirth",
+      "fire",
+      "bird"
+    ],
+    "description": "The mythical phoenix, dying in flame and rising from its own ashes. Named by explorers who felt the southern sky needed a constellation of resurrection.",
+    "x": 0.5453394651412964,
+    "y": -0.39326155185699463
+  },
+  {
+    "id": 39,
+    "name": "Microscopium",
+    "mythology": "Modern",
+    "hemisphere": "Southern",
+    "season": "Autumn",
+    "brightest_star": "Gamma Microscopii",
+    "tags": [
+      "microscope",
+      "instrument",
+      "science",
+      "enlightenment"
+    ],
+    "description": "A microscope. Named in the eighteenth century by a French astronomer who filled the empty patches of the southern sky with tools of the new sciences.",
+    "x": 0.5735985040664673,
+    "y": 0.32969704270362854
+  },
+  {
+    "id": 40,
+    "name": "Telescopium",
+    "mythology": "Modern",
+    "hemisphere": "Southern",
+    "season": "Summer",
+    "brightest_star": "Alpha Telescopii",
+    "tags": [
+      "telescope",
+      "instrument",
+      "science",
+      "enlightenment"
+    ],
+    "description": "A telescope, honoring the instrument that had just begun revealing new worlds. A quiet gesture: the sky, naming the tool that would let us see it clearly.",
+    "x": 0.6016044020652771,
+    "y": 0.6168989539146423
+  },
+  {
+    "id": 41,
+    "name": "Sopdet (Sirius)",
+    "mythology": "Egyptian",
+    "hemisphere": "Both",
+    "season": "Summer",
+    "brightest_star": "Sirius",
+    "tags": [
+      "dog star",
+      "flood",
+      "isis",
+      "brightest"
+    ],
+    "description": "The star of Isis, whose heliacal rising once heralded the flooding of the Nile. Egyptian priests watched for its return above the horizon; when it came, so did the water, and life.",
+    "x": 0.2601955831050873,
+    "y": -0.16937078535556793
+  },
+  {
+    "id": 42,
+    "name": "Sah (Orion)",
+    "mythology": "Egyptian",
+    "hemisphere": "Both",
+    "season": "Winter",
+    "brightest_star": "Rigel",
+    "tags": [
+      "osiris",
+      "king",
+      "afterlife",
+      "pyramid"
+    ],
+    "description": "The heavenly form of Osiris, god of the dead, king of the afterlife. The three pyramids at Giza are aligned with the three stars of his belt — earthly stone mirroring divine light.",
+    "x": 0.13180138170719147,
+    "y": 0.17328953742980957
+  },
+  {
+    "id": 43,
+    "name": "Meskhetiu (Big Dipper)",
+    "mythology": "Egyptian",
+    "hemisphere": "Northern",
+    "season": "Spring",
+    "brightest_star": "Alioth",
+    "tags": [
+      "bull leg",
+      "set",
+      "circumpolar",
+      "guardian"
+    ],
+    "description": "The bull's foreleg of the god Set, chained to the northern sky to prevent his return. Egyptian ritual invoked the Opening of the Mouth ceremony using this shape — a tool of the dead.",
+    "x": 0.2570790648460388,
+    "y": -0.36686891317367554
+  },
+  {
+    "id": 44,
+    "name": "Azure Dragon of the East",
+    "mythology": "Chinese",
+    "hemisphere": "Northern",
+    "season": "Spring",
+    "brightest_star": "Antares",
+    "tags": [
+      "dragon",
+      "east",
+      "spring",
+      "guardian"
+    ],
+    "description": "One of the Four Symbols of Chinese cosmology, guardian of the eastern sky and the spring. Its body sprawls across seven mansions, from horns to tail, a serpent of stars.",
+    "x": 0.6313858032226562,
+    "y": -0.7291408777236938
+  },
+  {
+    "id": 45,
+    "name": "Vermilion Bird of the South",
+    "mythology": "Chinese",
+    "hemisphere": "Southern",
+    "season": "Summer",
+    "brightest_star": "Alphard",
+    "tags": [
+      "bird",
+      "south",
+      "summer",
+      "fire",
+      "guardian"
+    ],
+    "description": "A phoenix-like bird of fire, guardian of the southern sky. It watches over summer, embodying the element of fire, elegance, and the ordering of ritual.",
+    "x": 0.728256106376648,
+    "y": -0.7260034084320068
+  },
+  {
+    "id": 46,
+    "name": "White Tiger of the West",
+    "mythology": "Chinese",
+    "hemisphere": "Both",
+    "season": "Autumn",
+    "brightest_star": "Aldebaran",
+    "tags": [
+      "tiger",
+      "west",
+      "autumn",
+      "metal",
+      "guardian"
+    ],
+    "description": "The white tiger, guardian of the west and of autumn. Rare and pale, it appears in the sky only when a sovereign rules with perfect virtue — an omen no dynasty could count on.",
+    "x": 0.6451001763343811,
+    "y": -1.0
+  },
+  {
+    "id": 47,
+    "name": "Black Tortoise of the North",
+    "mythology": "Chinese",
+    "hemisphere": "Northern",
+    "season": "Winter",
+    "brightest_star": "Fomalhaut",
+    "tags": [
+      "tortoise",
+      "snake",
+      "north",
+      "winter",
+      "guardian"
+    ],
+    "description": "A tortoise entwined with a snake, guardian of the north and of winter. The pairing represents endurance and cosmic longevity — the slow, unshakable rhythm of the cold months.",
+    "x": 0.6361128687858582,
+    "y": -0.835466742515564
+  },
+  {
+    "id": 48,
+    "name": "The Weaver Girl (Vega)",
+    "mythology": "Chinese",
+    "hemisphere": "Northern",
+    "season": "Summer",
+    "brightest_star": "Vega",
+    "tags": [
+      "love",
+      "separation",
+      "milky way",
+      "qixi"
+    ],
+    "description": "A weaver girl, exiled from her cowherd husband on opposite banks of the Milky Way. Once a year, magpies form a bridge so the lovers can meet — the origin of the Qixi festival.",
+    "x": 0.48677513003349304,
+    "y": 0.01362418569624424
+  },
+  {
+    "id": 49,
+    "name": "The Emu in the Sky",
+    "mythology": "Aboriginal Australian",
+    "hemisphere": "Southern",
+    "season": "Autumn",
+    "brightest_star": "N/A (dark constellation)",
+    "tags": [
+      "emu",
+      "dark constellation",
+      "milky way",
+      "dust lanes"
+    ],
+    "description": "A constellation defined not by stars but by the dark dust lanes of the Milky Way. The head sits in the Coalsack near the Southern Cross; the body stretches long across the galaxy.",
+    "x": 0.6311607360839844,
+    "y": 0.3644540309906006
+  },
+  {
+    "id": 50,
+    "name": "Djulpan (Orion's Belt)",
+    "mythology": "Aboriginal Australian",
+    "hemisphere": "Both",
+    "season": "Summer",
+    "brightest_star": "Alnilam",
+    "tags": [
+      "canoe",
+      "brothers",
+      "fishing",
+      "yolngu"
+    ],
+    "description": "Three brothers in a canoe, fishing on a river of stars. In some tellings, they broke a forbidden taboo and were caught in a great wind that carried them, still paddling, into the sky.",
+    "x": 0.45745354890823364,
+    "y": 0.3963794410228729
+  },
+  {
+    "id": 51,
+    "name": "The Seven Sisters (Pleiades)",
+    "mythology": "Aboriginal Australian",
+    "hemisphere": "Both",
+    "season": "Winter",
+    "brightest_star": "Alcyone",
+    "tags": [
+      "sisters",
+      "pursued",
+      "hunter",
+      "pleiades"
+    ],
+    "description": "Seven sisters fleeing a hunter across the sky. When he catches up, they take refuge among their family — a story told, in almost identical form, by peoples on every inhabited continent.",
+    "x": 0.1741124540567398,
+    "y": 0.548307478427887
+  },
+  {
+    "id": 52,
+    "name": "Matariki (Pleiades)",
+    "mythology": "Polynesian",
+    "hemisphere": "Both",
+    "season": "Winter",
+    "brightest_star": "Alcyone",
+    "tags": [
+      "new year",
+      "harvest",
+      "maori",
+      "pleiades"
+    ],
+    "description": "The Māori name for the Pleiades, whose reappearance before dawn marks the beginning of the new year. Each of its stars carries a domain — freshwater, wind, harvest, memory of the dead.",
+    "x": 0.5342155694961548,
+    "y": 0.459078848361969
+  },
+  {
+    "id": 53,
+    "name": "Te Waka o Rangi",
+    "mythology": "Polynesian",
+    "hemisphere": "Both",
+    "season": "Summer",
+    "brightest_star": "Rigel",
+    "tags": [
+      "canoe",
+      "voyaging",
+      "orion",
+      "milky way"
+    ],
+    "description": "The great celestial canoe of the sky, sailed by the god Tama-rereti to gather the stars and place them in the heavens. For Pacific voyagers, the sky itself was a boat, and they, its crew.",
+    "x": 0.4954415261745453,
+    "y": 0.6736184358596802
+  },
+  {
+    "id": 54,
+    "name": "Autahi (Canopus)",
+    "mythology": "Polynesian",
+    "hemisphere": "Southern",
+    "season": "Winter",
+    "brightest_star": "Canopus",
+    "tags": [
+      "chief",
+      "sacred",
+      "single star",
+      "navigation"
+    ],
+    "description": "Canopus, sailed by alone in the southern sky — a chief among stars. The Māori considered it sacred, so distinguished no other constellation was drawn near it.",
+    "x": 0.23266884684562683,
+    "y": 0.4144863486289978
+  },
+  {
+    "id": 55,
+    "name": "Freyja's Distaff",
+    "mythology": "Norse",
+    "hemisphere": "Both",
+    "season": "Winter",
+    "brightest_star": "Alnilam",
+    "tags": [
+      "spindle",
+      "orion belt",
+      "goddess",
+      "weaving"
+    ],
+    "description": "The three stars of Orion's belt, seen in the Norse north as the spindle of the goddess Freyja — the tool of weaving fate, glinting in the cold winter sky.",
+    "x": 0.35521718859672546,
+    "y": 0.15343259274959564
+  },
+  {
+    "id": 56,
+    "name": "Thor's Wagon",
+    "mythology": "Norse",
+    "hemisphere": "Northern",
+    "season": "Spring",
+    "brightest_star": "Alioth",
+    "tags": [
+      "wagon",
+      "big dipper",
+      "thunder",
+      "circumpolar"
+    ],
+    "description": "The stars of the Big Dipper, seen in Norse tradition as the wagon of the thunder god Thor, drawn eternally around the pole by his two goats.",
+    "x": 0.4566616117954254,
+    "y": -0.12556849420070648
+  },
+  {
+    "id": 57,
+    "name": "Aurvandil's Toe",
+    "mythology": "Norse",
+    "hemisphere": "Northern",
+    "season": "Summer",
+    "brightest_star": "Rigel",
+    "tags": [
+      "star",
+      "thor",
+      "frostbite",
+      "myth"
+    ],
+    "description": "A single star said to be the frostbitten toe of Aurvandil, broken off by Thor and hurled into the sky. A small piece of a hero, luminous with an old god's mercy.",
+    "x": 0.14291687309741974,
+    "y": -0.11434567719697952
+  },
+  {
+    "id": 58,
+    "name": "Nanurjuk",
+    "mythology": "Inuit",
+    "hemisphere": "Northern",
+    "season": "Winter",
+    "brightest_star": "Aldebaran",
+    "tags": [
+      "polar bear",
+      "hunted",
+      "spirit",
+      "arctic"
+    ],
+    "description": "The spirit of a great polar bear, hunted eternally by three sled dogs — the stars of Orion's belt — pursued across the dark polar sky of the Arctic winter.",
+    "x": 0.5439496040344238,
+    "y": -0.3851897716522217
+  },
+  {
+    "id": 59,
+    "name": "Aagjuuk",
+    "mythology": "Inuit",
+    "hemisphere": "Northern",
+    "season": "Winter",
+    "brightest_star": "Altair",
+    "tags": [
+      "dawn",
+      "returning sun",
+      "solstice",
+      "hope"
+    ],
+    "description": "Two bright stars whose predawn appearance told the Inuit that the sun was returning after the long polar night. The end of darkness, foretold in the sky before it arrived on the horizon.",
+    "x": 0.711927056312561,
+    "y": -0.057112134993076324
+  },
+  {
+    "id": 60,
+    "name": "Al-Jauzā'",
+    "mythology": "Arabic",
+    "hemisphere": "Both",
+    "season": "Winter",
+    "brightest_star": "Betelgeuse",
+    "tags": [
+      "central one",
+      "orion",
+      "medieval",
+      "islamic golden age"
+    ],
+    "description": "The Arabic name for Orion — 'the central one' — used by medieval Islamic astronomers whose star names still echo in the modern sky: Betelgeuse, Rigel, Aldebaran, Vega, all of Arabic origin.",
+    "x": 0.4991438090801239,
+    "y": 0.4910145401954651
+  }
+]

@@ -1,0 +1,13 @@
+[project]
+name = "my-project"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "dotenv>=0.9.9",
+    "huggingface>=0.0.1",
+    "llama-index>=0.14.22",
+    "qdrant-client>=1.18.0",
+    "sentence-transformers>=5.5.1",
+]

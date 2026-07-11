@@ -1,0 +1,122 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url("https://fonts.googleapis.com/css2?family=Mona+Sans:ital,wght@0,200..900;1,200..900&family=Geist+Mono:wght@400;500&display=swap");
+
+:root {
+  color-scheme: dark;
+
+  /* Qdrant brand tokens */
+  --qdrant-red: #dc244c;
+  --qdrant-red-dark: #9e0d38;
+  --qdrant-red-light: #ff8792;
+  --qdrant-violet: #6047ff;
+  --qdrant-violet-dark: #4325ae;
+  --qdrant-teal: #009688;
+  --qdrant-blue: #03a9f4;
+  --qdrant-orange: #ff9800;
+
+  --bg-base: #0b0f19;
+  --bg-elev-1: #111824;
+  --bg-elev-2: #141a2a;
+  --bg-elev-8: #212635;
+  --fg-primary: #f0f3fa;
+  --fg-secondary: #656b7f;
+  --fg-disabled: #abb1c7;
+  --line: #4e5366;
+
+  --brand-gradient: linear-gradient(135deg, #dc244c 0%, #6047ff 100%);
+}
+
+html,
+body {
+  background-color: var(--bg-base);
+  color: var(--fg-primary);
+  font-family: "Mona Sans", Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-feature-settings: "cv11", "ss01", "ss03";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow: hidden;
+}
+
+body {
+  min-height: 100vh;
+  width: 100vw;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* Selection */
+::selection {
+  background: var(--qdrant-red);
+  color: #ffffff;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--fg-secondary);
+}
+
+/* Utility for the brand gradient text (used sparingly on labels, never on headings per brand rules) */
+.gradient-border {
+  position: relative;
+}
+.gradient-border::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  padding: 1px;
+  border-radius: inherit;
+  background: var(--brand-gradient);
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+/* Faint grid texture for booth-style backgrounds */
+.grid-texture {
+  background-image:
+    linear-gradient(rgba(78, 83, 102, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(78, 83, 102, 0.08) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
+/* Radial vignette for booth focus */
+.vignette::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse at center, transparent 40%, rgba(11, 15, 25, 0.85) 100%);
+}
+
+/* Screen-safe headline sizing for kiosk displays */
+.display-1 {
+  font-size: clamp(3.5rem, 7vw, 6.5rem);
+  font-weight: 600;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+}
+.display-2 {
+  font-size: clamp(2.5rem, 5vw, 4.5rem);
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
