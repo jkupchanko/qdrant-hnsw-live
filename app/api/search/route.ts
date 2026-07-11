@@ -43,7 +43,7 @@ export async function POST(req: Request) {
     const hits: SearchHit[] = points.map((p) => ({
       id: Number(p.id),
       score: p.score,
-      payload: p.payload as SearchHit["payload"],
+      payload: p.payload as unknown as SearchHit["payload"],
     }));
     return NextResponse.json(
       { hits, serverTimeMs: Math.round(timeMs * 10) / 10 },
