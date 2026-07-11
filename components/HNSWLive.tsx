@@ -7,6 +7,7 @@ import { GENRE_COLOR, GENRE_ORDER, colorFor } from "@/lib/genres";
 import type { Movie, Query, SearchHit } from "@/lib/types";
 import { QdrantLogo } from "./QdrantLogo";
 import QRCode from "qrcode";
+import { embedText } from "@/lib/embed";
 
 const REPO_URL = "https://github.com/jkupchanko/qdrant-hnsw-live";
 
@@ -77,6 +78,29 @@ export function HNSWLive() {
   const [qIdx, setQIdx] = useState(0);
   const [typed, setTyped] = useState("");
   const [cycle, setCycle] = useState(0);
+
+  // Visitor-typed query — embedded in the browser, jumps the queue once.
+  const [customQ, setCustomQ] = useState<Query | null>(null);
+  const [searchInput, setSearchInput] = useState("");
+  const [embedState, setEmbedState] = useState<"idle" | "loading" | "error">("idle");
+
+  const submitCustom = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const text = searchInput.trim();
+    if (!text || embedState === "loading") return;
+    setEmbedState("loading");
+    try {
+      const vector = await embedText(text);
+      setEmbedState("idle");
+      probeRef.current = null;
+      setCustomQ({ text, vector });
+      setSearchInput("");
+      setTyped("");
+      setPhase("typing");
+    } catch {
+      setEmbedState("error");
+    }
+  };
   const [latest, setLatest] = useState<{
     text: string;
     hits: SearchHit[];
@@ -193,7 +217,7 @@ export function HNSWLive() {
     pointByIdRef.current = idx;
   }, [movies]);
 
-  const current = queries[qIdx];
+  const current = customQ ?? queries[qIdx];
 
   // ── phase machine ──
   useEffect(() => {
@@ -342,12 +366,16 @@ export function HNSWLive() {
     const t = setTimeout(() => {
       probeRef.current = null;
       setTyped("");
-      setQIdx((n) => (n + 1) % Math.max(queries.length, 1));
+      if (customQ) {
+        setCustomQ(null); // the visitor's query ran once, resume the bank
+      } else {
+        setQIdx((n) => (n + 1) % Math.max(queries.length, 1));
+      }
       setCycle((c) => c + 1);
       setPhase("typing");
     }, CLEAR_MS);
     return () => clearTimeout(t);
-  }, [phase, queries.length]);
+  }, [phase, queries.length, customQ]);
 
   // ── canvas ──
   useEffect(() => {
@@ -492,6 +520,33 @@ export function HNSWLive() {
           <div className="absolute top-5 left-1/2 -translate-x-1/2 z-10">
             <StepRail phase={phase} />
           </div>
+
+          {/* SEARCH BAR — visitors type their own query */}
+          <form
+            onSubmit={submitCustom}
+            className="absolute bottom-5 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 rounded-full card-glass-strong pl-5 pr-1.5 py-1.5 w-[420px]"
+          >
+            <input
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              placeholder={
+                embedState === "loading"
+                  ? "Loading the model…"
+                  : embedState === "error"
+                    ? "Something broke, try again"
+                    : "Try your own search"
+              }
+              disabled={embedState === "loading"}
+              className="flex-1 bg-transparent text-sm text-fg-primary placeholder:text-fg-secondary/60 outline-none"
+            />
+            <button
+              type="submit"
+              disabled={embedState === "loading" || !searchInput.trim()}
+              className="rounded-full bg-qdrant-red px-4 py-1.5 text-xs font-semibold text-white transition-opacity disabled:opacity-30 hover:opacity-90"
+            >
+              {embedState === "loading" ? "…" : "Search"}
+            </button>
+          </form>
 
           {/* SETTINGS PILL — reopens the centered setup card */}
           {!consoleOpen && (
