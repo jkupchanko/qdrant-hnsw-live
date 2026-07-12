@@ -601,7 +601,7 @@ export function HNSWLive() {
   return (
     <div className="relative z-10 flex h-screen w-screen flex-col overflow-hidden">
       {/* HEADER */}
-      <header className="relative flex items-center justify-between px-10 pt-7 pb-5">
+      <header className="relative flex items-center justify-between border-b border-white/[0.05] px-10 pt-6 pb-5">
         <div className="flex items-center gap-4">
           <QdrantLogo className="h-7" />
           <span className="h-8 w-px bg-white/10" />
@@ -666,7 +666,7 @@ export function HNSWLive() {
           {/* SEARCH BAR — visitors type their own query */}
           <form
             onSubmit={submitCustom}
-            className="absolute bottom-5 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 rounded-md card-glass-strong pl-5 pr-1.5 py-1.5 w-[420px]"
+            className="absolute bottom-5 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 rounded-md card-glass-strong pl-5 pr-1.5 py-1.5 w-[420px] ring-1 ring-white/[0.06] transition-shadow focus-within:ring-qdrant-red/50"
           >
             <input
               value={searchInput}
@@ -1289,7 +1289,7 @@ export function HNSWLive() {
       </AnimatePresence>
 
       {/* FOOTER */}
-      <footer className="flex items-center justify-between px-10 py-3 text-[11px] text-fg-secondary/60">
+      <footer className="flex items-center justify-between border-t border-white/[0.05] px-10 py-3 text-[11px] text-fg-secondary/60">
         <span className="font-mono">POST /collections/movies/points/search</span>
         <span>qdrant.tech/cloud</span>
       </footer>
