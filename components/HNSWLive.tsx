@@ -28,6 +28,7 @@ type Tab = "demo" | "inside";
 const WALK_MS = 2600;
 const RESULTS_MS = 800;
 const HOLD_MS = 5200;
+const HOLD_CUSTOM_MS = 16000; // a visitor's own search deserves a longer look
 const CLEAR_MS = 400;
 const TYPE_CHAR_MS = 42;
 const MIN_ENCODE_MS = 1400; // long enough that the "embed" step is readable
@@ -400,13 +401,14 @@ export function HNSWLive() {
     const next: Partial<Record<Phase, [Phase, number]>> = {
       walking: ["results", WALK_MS * pace],
       results: ["hold", RESULTS_MS * pace],
-      hold: ["clearing", HOLD_MS * pace],
+      hold: ["clearing", (customQ ? HOLD_CUSTOM_MS : HOLD_MS) * pace],
     };
     const step = next[phase];
     if (!step) return;
+    if (selected) return; // detail card open — hold everything until it closes
     const t = setTimeout(() => setPhase(step[0]), step[1]);
     return () => clearTimeout(t);
-  }, [phase, pace]);
+  }, [phase, pace, customQ, selected]);
 
   useEffect(() => {
     if (phase !== "clearing") return;
