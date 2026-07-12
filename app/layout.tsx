@@ -4,7 +4,9 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "HNSW Live · vector search, visualized",
   description:
-    "Mission control for a Qdrant Cloud collection at scale — 10,000 vectors, live HNSW traversals, and the ef_search knob in real time.",
+    "Mission control for a Qdrant Cloud collection at scale — live HNSW traversals, re-ranking, and every search knob in real time.",
+  // Versioned URL busts Chrome's stubborn favicon cache
+  icons: { icon: "/favicon.ico?v=2" },
 };
 
 export default function RootLayout({
