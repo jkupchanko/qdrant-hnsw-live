@@ -31,7 +31,7 @@ const HOLD_MS = 5200;
 const HOLD_CUSTOM_MS = 16000; // a visitor's own search deserves a longer look
 const CLEAR_MS = 400;
 const TYPE_CHAR_MS = 42;
-const MIN_ENCODE_MS = 1400; // long enough that the "embed" step is readable
+const MIN_ENCODE_MS = 10000; // hold the embed step long enough to talk through it
 
 const EF_CYCLE = [16, 64, 128, 512] as const;
 const CYCLES_PER_EF = 2;
