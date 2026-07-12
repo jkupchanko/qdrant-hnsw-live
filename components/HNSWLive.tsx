@@ -421,7 +421,13 @@ export function HNSWLive() {
           };
         }
         const wait = Math.max(0, MIN_ENCODE_MS - (performance.now() - started));
-        setTimeout(() => { if (!cancelled) setPhase("walking"); }, wait);
+        setTimeout(() => {
+          if (cancelled) return;
+          // Restart the probe clock now — its animation is timed from the
+          // start of the walking phase, not from when the response landed.
+          if (probeRef.current) probeRef.current.bornAt = performance.now();
+          setPhase("walking");
+        }, wait);
       } catch (e) {
         recover(e instanceof Error && e.name === "AbortError"
           ? "Request timed out — retrying with next query"
