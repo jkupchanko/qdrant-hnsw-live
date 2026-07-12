@@ -892,7 +892,22 @@ export function HNSWLive() {
                   &ldquo;{current.text}&rdquo; becomes 384 numbers
                 </div>
                 <VectorStrip vector={current.vector} />
-                <div className="mt-6 text-sm text-fg-secondary/70">The real vector.</div>
+                <div className="mt-4 text-sm text-fg-secondary/70">The real vector.</div>
+                <div className="mt-5 flex items-center gap-5 rounded-lg card-glass-strong px-5 py-3">
+                  <DistanceViz metric={distanceSel} />
+                  <div className="text-left max-w-[30ch]">
+                    <div className="text-[13px] font-medium text-fg-primary">
+                      {distanceSel === "cosine" && "Cosine, comparing direction"}
+                      {distanceSel === "dot" && "Dot product, direction and length"}
+                      {distanceSel === "euclid" && "Euclidean, straight-line distance"}
+                    </div>
+                    <div className="mt-0.5 text-[11px] leading-relaxed text-fg-secondary">
+                      {distanceSel === "cosine" && "Two vectors match when they point the same way. The angle is the score."}
+                      {distanceSel === "dot" && "Like cosine, but longer vectors score higher too."}
+                      {distanceSel === "euclid" && "Two vectors match when their points sit close together in space."}
+                    </div>
+                  </div>
+                </div>
               </motion.div>
             )}
           </AnimatePresence>
@@ -1341,6 +1356,60 @@ function EfPill({ active, onClick, children }: { active: boolean; onClick: () =>
     >
       {children}
     </button>
+  );
+}
+
+/**
+ * Geometric mini-diagram of the active distance metric. Two vectors —
+ * red = your query, violet = a movie — compared the way the metric compares.
+ */
+function DistanceViz({ metric }: { metric: "cosine" | "dot" | "euclid" }) {
+  // Origin bottom-left; A = query (red), B = candidate (violet)
+  const O = { x: 18, y: 96 };
+  const A = { x: 128, y: 26 };
+  const B = { x: 112, y: 62 };
+  return (
+    <svg width="150" height="110" viewBox="0 0 150 110" className="shrink-0">
+      {/* axes */}
+      <line x1={O.x} y1={O.y} x2={144} y2={O.y} stroke="rgba(255,255,255,0.12)" strokeWidth="1" />
+      <line x1={O.x} y1={O.y} x2={O.x} y2={8} stroke="rgba(255,255,255,0.12)" strokeWidth="1" />
+
+      {/* angle arc for cosine + dot */}
+      {(metric === "cosine" || metric === "dot") && (
+        <path
+          d={`M ${O.x + 34} ${O.y - 22} A 40 40 0 0 1 ${O.x + 40} ${O.y - 10}`}
+          fill="none"
+          stroke="#FF9800"
+          strokeWidth="1.6"
+        />
+      )}
+      {(metric === "cosine" || metric === "dot") && (
+        <text x={O.x + 46} y={O.y - 16} fill="#FF9800" fontSize="10" fontFamily="monospace">θ</text>
+      )}
+
+      {/* euclid: dashed line between tips */}
+      {metric === "euclid" && (
+        <>
+          <line x1={A.x} y1={A.y} x2={B.x} y2={B.y} stroke="#FF9800" strokeWidth="1.6" strokeDasharray="4 3" />
+          <text x={(A.x + B.x) / 2 + 6} y={(A.y + B.y) / 2} fill="#FF9800" fontSize="10" fontFamily="monospace">d</text>
+        </>
+      )}
+
+      {/* dot: projection of B onto A */}
+      {metric === "dot" && (
+        <line x1={B.x} y1={B.y} x2={(A.x + O.x) * 0.62} y2={(A.y + O.y) * 0.55} stroke="rgba(255,255,255,0.35)" strokeWidth="1" strokeDasharray="2 3" />
+      )}
+
+      {/* vector A — the query */}
+      <line x1={O.x} y1={O.y} x2={A.x} y2={A.y} stroke="#DC244C" strokeWidth="2.2" />
+      <circle cx={A.x} cy={A.y} r="3.4" fill="#DC244C" />
+      <text x={A.x + 4} y={A.y - 4} fill="#DC244C" fontSize="9" fontFamily="monospace">query</text>
+
+      {/* vector B — a movie */}
+      <line x1={O.x} y1={O.y} x2={B.x} y2={B.y} stroke="#6047FF" strokeWidth="2.2" />
+      <circle cx={B.x} cy={B.y} r="3.4" fill="#6047FF" />
+      <text x={B.x + 6} y={B.y + 10} fill="#8B7CFF" fontSize="9" fontFamily="monospace">movie</text>
+    </svg>
   );
 }
 
