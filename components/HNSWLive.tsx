@@ -164,6 +164,8 @@ export function HNSWLive() {
     fetched: number;
     /** For re-ranked hits: original ANN rank per displayed position. */
     origRanks: number[];
+    /** The top-K in pure vector-search order, before the cross-encoder. */
+    origHits: SearchHit[];
   } | null>(null);
 
   // Manual override wins; otherwise ef auto-cycles so the booth varies itself.
@@ -367,6 +369,7 @@ export function HNSWLive() {
         let rerankMs = 0;
         const fetched = data.hits.length;
         let origRanks = hits2.map((_, i) => i);
+        const origHits = data.hits.slice(0, topK); // pure ANN order, for the comparison
         if (rerankMode && hits2.length > 1) {
           try {
             const t0 = performance.now();
@@ -407,6 +410,7 @@ export function HNSWLive() {
           rerankMs,
           fetched,
           origRanks,
+          origHits,
         });
         latencyHistoryRef.current = [...latencyHistoryRef.current.slice(-(LAT_HISTORY - 1)), took];
         setTotalOps((n) => n + 1);
@@ -959,6 +963,46 @@ export function HNSWLive() {
                     {((latest.nodesVisited / Math.max(movies.length, 1)) * 100).toFixed(1)}% of the data touched
                   </div>
                 </div>
+                {/* BEFORE strip — pure vector-search order, for comparison */}
+                {latest.reranked && (
+                  <div className="mb-2">
+                    <div className="mb-1.5 text-[10px] tracking-wide text-fg-secondary/70">
+                      Before, vector search order
+                    </div>
+                    <div
+                      className="grid gap-3"
+                      style={{ gridTemplateColumns: `repeat(${Math.min(latest.limit, 6)}, 1fr)` }}
+                    >
+                      {latest.origHits.slice(0, latest.limit).map((h, i) => {
+                        // Where did this one land after re-ranking?
+                        const newPos = latest.hits.findIndex((r) => r.id === h.id);
+                        return (
+                          <div
+                            key={`orig-${h.id}`}
+                            className="flex items-center gap-2 rounded-lg bg-white/[0.04] ring-1 ring-white/[0.06] px-2 py-1.5 opacity-75"
+                          >
+                            <span className="shrink-0 font-mono text-[10px] text-fg-secondary">#{i + 1}</span>
+                            <span className="min-w-0 truncate text-[11px] text-fg-primary/85">{h.payload.title}</span>
+                            <span className="ml-auto shrink-0 text-[10px] font-medium">
+                              {newPos === -1 ? (
+                                <span className="text-fg-secondary/60">out</span>
+                              ) : newPos < i ? (
+                                <span style={{ color: "#4CAF50" }}>→ #{newPos + 1}</span>
+                              ) : newPos > i ? (
+                                <span className="text-fg-secondary">→ #{newPos + 1}</span>
+                              ) : (
+                                <span className="text-fg-secondary/60">= #{newPos + 1}</span>
+                              )}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div className="mt-2 mb-1.5 text-[10px] tracking-wide text-fg-secondary/70">
+                      After, cross-encoder re-rank
+                    </div>
+                  </div>
+                )}
                 <div
                   className="grid gap-3"
                   style={{ gridTemplateColumns: `repeat(${Math.min(latest.limit, 6)}, 1fr)` }}
