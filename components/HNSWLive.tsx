@@ -611,7 +611,7 @@ export function HNSWLive() {
           </div>
         </div>
         {/* Tabs — pinned to true center regardless of side content */}
-        <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 mt-1 flex items-center gap-1 rounded-full bg-white/[0.04] ring-1 ring-white/[0.06] p-1">
+        <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 mt-1 flex items-center gap-1 rounded-md bg-white/[0.04] ring-1 ring-white/[0.06] p-1">
           <TabButton active={tab === "demo"} onClick={() => setTab("demo")}>Live demo</TabButton>
           <TabButton active={tab === "inside"} onClick={() => setTab("inside")}>Under the hood</TabButton>
         </div>
@@ -624,7 +624,7 @@ export function HNSWLive() {
       {/* ─── DEMO TAB ─── */}
       <main className={`relative flex-1 min-h-0 flex-col ${tab === "demo" ? "flex" : "hidden"}`}>
         {/* Map fills the stage */}
-        <div className="absolute inset-x-6 top-0 bottom-6 rounded-3xl overflow-hidden card">
+        <div className="absolute inset-x-6 top-0 bottom-6 rounded-lg overflow-hidden card">
           <canvas
             ref={canvasRef}
             onMouseMove={handleMapMove}
@@ -636,7 +636,7 @@ export function HNSWLive() {
           {/* Hover tooltip for highlighted matches on the map */}
           {hoverHit && (
             <div
-              className="pointer-events-none absolute z-20 flex items-center gap-2.5 rounded-xl card-glass-strong px-3 py-2"
+              className="pointer-events-none absolute z-20 flex items-center gap-2.5 rounded-lg card-glass-strong px-3 py-2"
               style={{
                 left: Math.min(Math.max(hoverHit.x, 110), 9999),
                 top: hoverHit.y - 12,
@@ -666,7 +666,7 @@ export function HNSWLive() {
           {/* SEARCH BAR — visitors type their own query */}
           <form
             onSubmit={submitCustom}
-            className="absolute bottom-5 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 rounded-full card-glass-strong pl-5 pr-1.5 py-1.5 w-[420px]"
+            className="absolute bottom-5 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 rounded-md card-glass-strong pl-5 pr-1.5 py-1.5 w-[420px]"
           >
             <input
               value={searchInput}
@@ -684,7 +684,7 @@ export function HNSWLive() {
             <button
               type="submit"
               disabled={embedState === "loading" || !searchInput.trim()}
-              className="rounded-full bg-qdrant-red px-4 py-1.5 text-xs font-semibold text-white transition-opacity disabled:opacity-30 hover:opacity-90"
+              className="rounded-md bg-qdrant-red px-4 py-1.5 text-xs font-semibold text-white transition-opacity disabled:opacity-30 hover:opacity-90"
             >
               {embedState === "loading" ? "…" : "Search"}
             </button>
@@ -694,7 +694,7 @@ export function HNSWLive() {
           {!consoleOpen && (
             <button
               onClick={() => setConsoleOpen(true)}
-              className="absolute bottom-5 left-5 z-10 rounded-full card-glass-strong px-4 py-2 text-xs font-medium text-fg-secondary hover:text-fg-primary transition-colors"
+              className="absolute bottom-5 left-5 z-10 rounded-md card-glass-strong px-4 py-2 text-xs font-medium text-fg-secondary hover:text-fg-primary transition-colors"
             >
               Settings
             </button>
@@ -714,7 +714,7 @@ export function HNSWLive() {
                   initial={{ y: 14, opacity: 0 }}
                   animate={{ y: 0, opacity: 1 }}
                   exit={{ y: 10, opacity: 0 }}
-                  className="flex w-[420px] max-h-[62vh] flex-col rounded-3xl card-glass-strong p-6"
+                  className="flex w-[420px] max-h-[62vh] flex-col rounded-lg card-glass-strong p-6"
                 >
                   <div className="text-xl font-semibold tracking-tight-brand text-fg-primary">Set it up.</div>
                   <div className="mt-0.5 mb-4 text-[13px] text-fg-secondary">Every choice applies to the next search.</div>
@@ -779,7 +779,7 @@ export function HNSWLive() {
                   <div className="pt-4 shrink-0">
                     <button
                       onClick={() => setConsoleOpen(false)}
-                      className="w-full rounded-full bg-qdrant-red py-2.5 text-sm font-semibold text-white transition-opacity hover:opacity-90"
+                      className="w-full rounded-md bg-qdrant-red py-2.5 text-sm font-semibold text-white transition-opacity hover:opacity-90"
                     >
                       Watch it search
                     </button>
@@ -798,7 +798,7 @@ export function HNSWLive() {
           {/* DETAILS TOGGLE — request/response review */}
           <button
             onClick={() => setShowDetails((s) => !s)}
-            className={`absolute top-5 right-5 z-10 rounded-full px-4 py-1.5 text-xs font-medium transition-all ${
+            className={`absolute top-5 right-5 z-10 rounded-md px-4 py-1.5 text-xs font-medium transition-all ${
               showDetails ? "bg-fg-primary text-bg-base" : "card-glass-strong text-fg-secondary hover:text-fg-primary"
             }`}
           >
@@ -813,7 +813,7 @@ export function HNSWLive() {
                 initial={{ opacity: 0, x: 24 }}
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0, x: 24 }}
-                className="absolute right-5 top-16 bottom-5 z-10 w-[330px] rounded-2xl card-glass-strong p-4 overflow-y-auto"
+                className="absolute right-5 top-16 bottom-5 z-10 w-[330px] rounded-lg card-glass-strong p-4 overflow-y-auto"
               >
                 <div className="eyebrow mb-2">Request · POST /points/search</div>
                 <pre className="rounded-lg bg-black/35 p-3 text-[10.5px] leading-relaxed text-fg-primary/90 font-mono whitespace-pre-wrap">
@@ -905,7 +905,7 @@ export function HNSWLive() {
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -8 }}
-                className="absolute top-20 left-1/2 -translate-x-1/2 rounded-full card-glass-strong px-6 py-2.5 text-sm text-fg-primary/90"
+                className="absolute top-20 left-1/2 -translate-x-1/2 rounded-md card-glass-strong px-6 py-2.5 text-sm text-fg-primary/90"
               >
                 {exactMode
                   ? <>Checking <span className="text-qdrant-red font-medium">all {movies.length.toLocaleString()}</span> vectors</>
@@ -927,7 +927,7 @@ export function HNSWLive() {
                 {/* Keyword vs meaning — the walk-by hook */}
                 {latest.keywordCount != null && (
                   <div className="mb-4 flex items-stretch justify-center gap-3">
-                    <div className="rounded-2xl card-glass-strong px-6 py-3 text-center">
+                    <div className="rounded-lg card-glass-strong px-6 py-3 text-center">
                       <div className="eyebrow">Keyword search</div>
                       <div className={`text-3xl font-semibold tracking-tight-brand ${latest.keywordCount === 0 ? "text-fg-secondary" : "text-fg-primary"}`}>
                         {latest.keywordCount}
@@ -937,7 +937,7 @@ export function HNSWLive() {
                       </div>
                     </div>
                     <div className="flex items-center text-fg-secondary/50 text-lg">vs</div>
-                    <div className="rounded-2xl bg-qdrant-red/12 ring-1 ring-qdrant-red/30 px-6 py-3 text-center">
+                    <div className="rounded-lg bg-qdrant-red/12 ring-1 ring-qdrant-red/30 px-6 py-3 text-center">
                       <div className="eyebrow">Meaning</div>
                       <div className="text-3xl font-semibold tracking-tight-brand text-qdrant-red">
                         {latest.hits.length}
@@ -1023,7 +1023,7 @@ export function HNSWLive() {
           </AnimatePresence>
 
           {error && (
-            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 rounded-xl bg-qdrant-red/10 ring-1 ring-qdrant-red/40 px-4 py-2 text-xs text-fg-primary max-w-[70%] truncate">
+            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 rounded-lg bg-qdrant-red/10 ring-1 ring-qdrant-red/40 px-4 py-2 text-xs text-fg-primary max-w-[70%] truncate">
               {error}
             </div>
           )}
@@ -1054,7 +1054,7 @@ export function HNSWLive() {
               </div>
               <div className="mt-4 flex flex-wrap gap-1.5">
                 {genreCounts.slice(0, 10).map(({ genre, count }) => (
-                  <span key={genre} className="rounded-full bg-white/[0.04] ring-1 ring-white/[0.06] px-2.5 py-1 text-[11px] text-fg-primary/85">
+                  <span key={genre} className="rounded bg-white/[0.04] ring-1 ring-white/[0.06] px-2.5 py-1 text-[11px] text-fg-primary/85">
                     <span className="inline-block h-1.5 w-1.5 rounded-full mr-1.5 align-middle" style={{ background: GENRE_COLOR[genre] }} />
                     {genre} <span className="text-fg-secondary">{count.toLocaleString()}</span>
                   </span>
@@ -1141,9 +1141,9 @@ export function HNSWLive() {
               <div className="mt-3 flex items-center gap-5">
                 {qrUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img src={qrUrl} alt="QR code to the GitHub repo" className="h-36 w-36 rounded-xl bg-white/[0.03] ring-1 ring-white/[0.06] p-2" />
+                  <img src={qrUrl} alt="QR code to the GitHub repo" className="h-36 w-36 rounded-lg bg-white/[0.03] ring-1 ring-white/[0.06] p-2" />
                 ) : (
-                  <div className="h-36 w-36 rounded-xl bg-white/[0.03] ring-1 ring-white/[0.06]" />
+                  <div className="h-36 w-36 rounded-lg bg-white/[0.03] ring-1 ring-white/[0.06]" />
                 )}
                 <div className="text-[13px] leading-relaxed text-fg-secondary">
                   <div className="font-mono text-fg-primary/90 text-[12px] break-all">{REPO_URL}</div>
@@ -1194,11 +1194,11 @@ export function HNSWLive() {
               animate={{ y: 0, scale: 1 }}
               exit={{ y: 10, scale: 0.98 }}
               onClick={(e) => e.stopPropagation()}
-              className="flex w-[720px] max-h-[80vh] gap-6 rounded-3xl card-glass-strong p-6 overflow-hidden"
+              className="flex w-[720px] max-h-[80vh] gap-6 rounded-lg card-glass-strong p-6 overflow-hidden"
             >
               {/* Poster art */}
               <div
-                className="relative w-[220px] shrink-0 self-stretch min-h-[320px] overflow-hidden rounded-2xl"
+                className="relative w-[220px] shrink-0 self-stretch min-h-[320px] overflow-hidden rounded-lg"
                 style={{
                   background: `linear-gradient(150deg, hsl(${selected.payload.hue ?? 220},62%,34%) 0%, hsl(${((selected.payload.hue ?? 220) + 35) % 360},52%,12%) 100%)`,
                 }}
@@ -1222,16 +1222,16 @@ export function HNSWLive() {
                     <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                       <span className="text-[12px] text-fg-secondary mr-1">{selected.payload.year}</span>
                       {selected.payload.genres.map((g) => (
-                        <span key={g} className="rounded-full bg-white/[0.05] ring-1 ring-white/[0.08] px-2 py-0.5 text-[10px] text-fg-primary/85">{g}</span>
+                        <span key={g} className="rounded bg-white/[0.05] ring-1 ring-white/[0.08] px-2 py-0.5 text-[10px] text-fg-primary/85">{g}</span>
                       ))}
-                      <span className="rounded-full bg-qdrant-red/15 ring-1 ring-qdrant-red/30 px-2 py-0.5 text-[10px] text-qdrant-red">
+                      <span className="rounded bg-qdrant-red/15 ring-1 ring-qdrant-red/30 px-2 py-0.5 text-[10px] text-qdrant-red">
                         match {Math.round(selected.score * 100)}%
                       </span>
                     </div>
                   </div>
                   <button
                     onClick={() => setSelected(null)}
-                    className="shrink-0 rounded-full bg-white/[0.06] px-3 py-1 text-xs text-fg-secondary hover:text-fg-primary"
+                    className="shrink-0 rounded-md bg-white/[0.06] px-3 py-1 text-xs text-fg-secondary hover:text-fg-primary"
                   >
                     Close
                   </button>
@@ -1295,14 +1295,14 @@ const STEPS: Array<{ key: string; label: string; phases: Phase[] }> = [
 function StepRail({ phase }: { phase: Phase }) {
   const activeIdx = STEPS.findIndex((s) => s.phases.includes(phase));
   return (
-    <div className="flex items-center gap-1 rounded-full card-glass-strong px-2 py-1.5">
+    <div className="flex items-center gap-1 rounded-md card-glass-strong px-2 py-1.5">
       {STEPS.map((s, i) => {
         const active = i === activeIdx;
         const done = activeIdx > i;
         return (
           <div key={s.key} className="flex items-center">
             <span
-              className={`rounded-full px-3.5 py-1 text-xs font-medium transition-all duration-300 ${
+              className={`rounded px-3.5 py-1 text-xs font-medium transition-all duration-300 ${
                 active
                   ? "bg-qdrant-red text-white shadow-glow"
                   : done
@@ -1335,7 +1335,7 @@ function EfPill({ active, onClick, children }: { active: boolean; onClick: () =>
   return (
     <button
       onClick={onClick}
-      className={`rounded-full px-2.5 py-[3px] text-[11px] font-medium transition-all ${
+      className={`rounded px-2.5 py-[3px] text-[11px] font-medium transition-all ${
         active ? "bg-qdrant-red text-white" : "bg-white/[0.05] text-fg-secondary hover:text-fg-primary"
       }`}
     >
@@ -1376,7 +1376,7 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
   return (
     <button
       onClick={onClick}
-      className={`rounded-full px-5 py-1.5 text-sm font-medium transition-all ${
+      className={`rounded px-5 py-1.5 text-sm font-medium transition-all ${
         active ? "bg-fg-primary text-bg-base" : "text-fg-secondary hover:text-fg-primary"
       }`}
     >
@@ -1404,7 +1404,7 @@ function KV({ k, v, dot, accent = false, tip }: { k: string; v: string; dot?: st
         {v}
       </div>
       {tip && (
-        <div className="pointer-events-none absolute bottom-full left-1/2 z-30 mb-2 hidden w-56 -translate-x-1/2 rounded-xl card-glass-strong px-3 py-2 text-[11px] leading-relaxed text-fg-primary/90 group-hover:block">
+        <div className="pointer-events-none absolute bottom-full left-1/2 z-30 mb-2 hidden w-56 -translate-x-1/2 rounded-lg card-glass-strong px-3 py-2 text-[11px] leading-relaxed text-fg-primary/90 group-hover:block">
           {tip}
         </div>
       )}
@@ -1519,7 +1519,7 @@ function VerdictCard({ modeStats }: { modeStats: Record<string, number[]> }) {
           );
         })}
       </div>
-      <div className="mt-4 rounded-xl bg-qdrant-red/10 ring-1 ring-qdrant-red/25 px-4 py-3 text-[13px] leading-relaxed text-fg-primary/90">
+      <div className="mt-4 rounded-lg bg-qdrant-red/10 ring-1 ring-qdrant-red/25 px-4 py-3 text-[13px] leading-relaxed text-fg-primary/90">
         <span className="font-semibold text-qdrant-red">Our pick: </span>
         HNSW with ef 64 on cosine. Near-perfect accuracy, one graph in RAM
         {ef64 ? <>, measured <span className="text-fg-primary font-medium">{ef64} ms</span> here</> : null}
@@ -1552,7 +1552,7 @@ function ResultCard({ hit, rank, euclid = false, move = 0, onClick }: { hit: Sea
       exit={{ opacity: 0 }}
       transition={{ duration: 0.35, delay: rank * 0.09 }}
       onClick={onClick}
-      className="relative h-[118px] overflow-hidden rounded-2xl cursor-pointer ring-1 ring-transparent transition-all hover:ring-white/40 hover:scale-[1.03]"
+      className="relative h-[118px] overflow-hidden rounded-lg cursor-pointer ring-1 ring-transparent transition-all hover:ring-white/40 hover:scale-[1.03]"
       style={{ background: `linear-gradient(140deg, hsl(${hue},60%,30%) 0%, hsl(${(hue + 30) % 360},50%,12%) 100%)` }}
     >
       {hit.payload.poster && (
@@ -1566,12 +1566,12 @@ function ResultCard({ hit, rank, euclid = false, move = 0, onClick }: { hit: Sea
       )}
       <div aria-hidden className="absolute inset-0" style={{ background: `radial-gradient(circle at 22% 18%, hsla(${hue},85%,70%,0.35) 0%, transparent 55%)` }} />
       <div aria-hidden className="absolute inset-x-0 bottom-0 h-2/3" style={{ background: "linear-gradient(to top, rgba(11,15,25,0.9), transparent)" }} />
-      <div className="absolute left-2.5 top-2.5 flex items-center gap-1 rounded-full bg-black/45 px-2 py-0.5 text-[10px] font-semibold text-white/95 backdrop-blur">
+      <div className="absolute left-2.5 top-2.5 flex items-center gap-1 rounded bg-black/45 px-2 py-0.5 text-[10px] font-semibold text-white/95 backdrop-blur">
         #{rank + 1}
         {move > 0 && <span style={{ color: "#4CAF50" }}>↑{move}</span>}
         {move < 0 && <span className="text-white/50">↓{-move}</span>}
       </div>
-      <div className="absolute right-2.5 top-2.5 rounded-full bg-black/45 px-2 py-0.5 text-[10px] font-medium text-white/95 backdrop-blur">
+      <div className="absolute right-2.5 top-2.5 rounded bg-black/45 px-2 py-0.5 text-[10px] font-medium text-white/95 backdrop-blur">
         {scoreLabel}
       </div>
       <div className="absolute inset-x-0 bottom-0 p-3">
