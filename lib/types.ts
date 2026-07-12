@@ -1,9 +1,7 @@
-/** Slim shape shipped in public/data/movies.json — only what the client needs to render. */
+/** Slim shape shipped in public/data/movies.json — only what the map needs. */
 export interface Movie {
   id: number;
-  title: string;
   genres: string[];
-  hue: number;
   x: number;
   y: number;
 }
@@ -21,6 +19,8 @@ export interface MoviePayload {
   mood: string[];
   hue: number;
   description: string;
+  /** Wikipedia lead-image thumbnail, when the article has one. */
+  poster?: string;
 }
 
 export interface SearchHit {

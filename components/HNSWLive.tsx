@@ -54,6 +54,15 @@ interface LogEntry {
   topTitle: string;
   topHue: number;
 }
+interface VariantRow {
+  key: string;
+  name: string;
+  status: string;
+  points: number;
+  distance: string;
+  m: number;
+}
+
 interface ClusterInfo {
   status: string;
   points_count: number;
@@ -78,6 +87,23 @@ export function HNSWLive() {
   const [qIdx, setQIdx] = useState(0);
   const [typed, setTyped] = useState("");
   const [cycle, setCycle] = useState(0);
+
+  // Clicked result → detail modal with recommend-powered "more like this".
+  const [selected, setSelected] = useState<SearchHit | null>(null);
+  const [similar, setSimilar] = useState<SearchHit[]>([]);
+  const openDetail = async (hit: SearchHit) => {
+    setSelected(hit);
+    setSimilar([]);
+    try {
+      const r = await fetch("/api/similar", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: hit.id, limit: 4 }),
+      });
+      const d = (await r.json()) as { hits?: SearchHit[] };
+      if (d.hits) setSimilar(d.hits);
+    } catch { /* row just stays empty */ }
+  };
 
   // Visitor-typed query — embedded in the browser, jumps the queue once.
   const [customQ, setCustomQ] = useState<Query | null>(null);
@@ -168,6 +194,7 @@ export function HNSWLive() {
     }).then(setQrUrl).catch(() => {});
   }, []);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const staticLayerRef = useRef<HTMLCanvasElement | null>(null); // 100K points pre-rendered once
   const pointsRef = useRef<Point[]>([]);
   const pointByIdRef = useRef<Map<number, Point>>(new Map());
   const probeRef = useRef<Probe | null>(null);
@@ -175,6 +202,7 @@ export function HNSWLive() {
   useEffect(() => { phaseRef.current = phase; }, [phase]);
 
   const [clusterInfo, setClusterInfo] = useState<ClusterInfo | null>(null);
+  const [variantsInfo, setVariantsInfo] = useState<VariantRow[]>([]);
 
   // ── data ──
   useEffect(() => {
@@ -187,8 +215,9 @@ export function HNSWLive() {
       try {
         const r = await fetch("/api/stats", { cache: "no-store" });
         if (r.ok) {
-          const d = (await r.json()) as { info?: ClusterInfo };
+          const d = (await r.json()) as { info?: ClusterInfo; variants?: VariantRow[] };
           if (d.info) setClusterInfo(d.info);
+          if (d.variants) setVariantsInfo(d.variants);
         }
       } catch { /* quiet */ }
     };
@@ -215,6 +244,24 @@ export function HNSWLive() {
     const idx = new Map<number, Point>();
     for (const p of pts) idx.set(p.id, p);
     pointByIdRef.current = idx;
+
+    // Pre-render every point to an offscreen layer once. At 100K points,
+    // drawing them per-frame would sink the frame rate; blitting one image
+    // costs the same regardless of collection size.
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const layer = document.createElement("canvas");
+    layer.width = cw * dpr;
+    layer.height = ch * dpr;
+    const lctx = layer.getContext("2d");
+    if (lctx) {
+      lctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      const size = movies.length > 30000 ? 1.2 : 2;
+      for (const p of pts) {
+        lctx.fillStyle = p.color;
+        lctx.fillRect(p.tx - size / 2, p.ty - size / 2, size, size);
+      }
+    }
+    staticLayerRef.current = layer;
   }, [movies]);
 
   const current = customQ ?? queries[qIdx];
@@ -401,13 +448,12 @@ export function HNSWLive() {
       const ph = phaseRef.current;
 
       const active = ph === "walking" || ph === "results" || ph === "hold";
-      ctx.globalAlpha = active ? 0.4 : 0.75;
-      for (let i = 0; i < pts.length; i++) {
-        const p = pts[i];
-        ctx.fillStyle = p.color;
-        ctx.fillRect(p.tx - 1, p.ty - 1, 2, 2);
+      const layer = staticLayerRef.current;
+      if (layer) {
+        ctx.globalAlpha = active ? 0.4 : 0.75;
+        ctx.drawImage(layer, 0, 0, w, h);
+        ctx.globalAlpha = 1;
       }
-      ctx.globalAlpha = 1;
 
       if (probe && active) {
         const age = performance.now() - probe.bornAt;
@@ -496,7 +542,7 @@ export function HNSWLive() {
           <span className="h-8 w-px bg-white/10" />
           <div className="leading-tight">
             <div className="text-xl font-semibold tracking-tight-brand text-fg-primary">Semantic search, live.</div>
-            <div className="text-[11px] text-fg-secondary">10,000 movies on one live cluster</div>
+            <div className="text-[11px] text-fg-secondary">{movies.length > 0 ? `${movies.length.toLocaleString()} movies on one live cluster` : "one live cluster"}</div>
           </div>
         </div>
         {/* Tabs — pinned to true center regardless of side content */}
@@ -817,7 +863,7 @@ export function HNSWLive() {
                   style={{ gridTemplateColumns: `repeat(${Math.min(latest.limit, 6)}, 1fr)` }}
                 >
                   {latest.hits.slice(0, latest.limit).map((h, i) => (
-                    <ResultCard key={`${latest.text}-${h.id}`} hit={h} rank={i} euclid={latest.euclid} />
+                    <ResultCard key={`${latest.text}-${h.id}`} hit={h} rank={i} euclid={latest.euclid} onClick={() => openDetail(h)} />
                   ))}
                 </div>
               </motion.div>
@@ -932,6 +978,10 @@ export function HNSWLive() {
               </div>
             </InsideCard>
 
+            <VerdictCard modeStats={modeStatsRef.current} />
+
+            <ScalingCard variants={variantsInfo} />
+
             <InsideCard
               title="Take it home"
               lead="The whole demo is open source. Scan to clone it, point it at your own cluster, swap in your own data."
@@ -975,6 +1025,101 @@ export function HNSWLive() {
           </div>
         </div>
       </main>
+
+      {/* DETAIL MODAL — click a result to review it */}
+      <AnimatePresence>
+        {selected && (
+          <motion.div
+            key="detail"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setSelected(null)}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-bg-base/70 backdrop-blur-sm p-8"
+          >
+            <motion.div
+              initial={{ y: 16, scale: 0.98 }}
+              animate={{ y: 0, scale: 1 }}
+              exit={{ y: 10, scale: 0.98 }}
+              onClick={(e) => e.stopPropagation()}
+              className="flex w-[720px] max-h-[80vh] gap-6 rounded-3xl card-glass-strong p-6 overflow-hidden"
+            >
+              {/* Poster art */}
+              <div
+                className="relative w-[220px] shrink-0 self-stretch min-h-[320px] overflow-hidden rounded-2xl"
+                style={{
+                  background: `linear-gradient(150deg, hsl(${selected.payload.hue ?? 220},62%,34%) 0%, hsl(${((selected.payload.hue ?? 220) + 35) % 360},52%,12%) 100%)`,
+                }}
+              >
+                <div aria-hidden className="absolute inset-0" style={{ background: `radial-gradient(circle at 25% 18%, hsla(${selected.payload.hue ?? 220},85%,72%,0.4) 0%, transparent 55%)` }} />
+                {selected.payload.poster && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={selected.payload.poster} alt="" className="absolute inset-0 h-full w-full object-cover" />
+                )}
+                <div className="absolute inset-x-0 bottom-0 p-4" style={{ background: "linear-gradient(to top, rgba(11,15,25,0.9), transparent)" }}>
+                  <div className="text-lg font-semibold leading-tight tracking-tight-brand text-white">{selected.payload.title}</div>
+                  <div className="mt-1 text-[11px] text-white/70">{selected.payload.year}</div>
+                </div>
+              </div>
+
+              {/* Details */}
+              <div className="flex min-w-0 flex-1 flex-col">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="text-2xl font-semibold tracking-tight-brand text-fg-primary">{selected.payload.title}</div>
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                      <span className="text-[12px] text-fg-secondary mr-1">{selected.payload.year}</span>
+                      {selected.payload.genres.map((g) => (
+                        <span key={g} className="rounded-full bg-white/[0.05] ring-1 ring-white/[0.08] px-2 py-0.5 text-[10px] text-fg-primary/85">{g}</span>
+                      ))}
+                      <span className="rounded-full bg-qdrant-red/15 ring-1 ring-qdrant-red/30 px-2 py-0.5 text-[10px] text-qdrant-red">
+                        match {Math.round(selected.score * 100)}%
+                      </span>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setSelected(null)}
+                    className="shrink-0 rounded-full bg-white/[0.06] px-3 py-1 text-xs text-fg-secondary hover:text-fg-primary"
+                  >
+                    Close
+                  </button>
+                </div>
+
+                <p className="mt-4 flex-1 min-h-0 overflow-y-auto pr-1 text-[13.5px] leading-relaxed text-fg-primary/85">
+                  {selected.payload.description}
+                </p>
+
+                <div className="mt-4 shrink-0">
+                  <div className="eyebrow mb-2">More like this, from Qdrant recommend</div>
+                  <div className="grid grid-cols-4 gap-2">
+                    {(similar.length ? similar : Array.from({ length: 4 }).map(() => null)).map((s, i) =>
+                      s == null ? (
+                        <div key={`sk-${i}`} className="h-[64px] rounded-lg bg-white/[0.03] ring-1 ring-white/[0.05] animate-pulse" />
+                      ) : (
+                        <button
+                          key={s.id}
+                          onClick={() => openDetail(s)}
+                          className="relative h-[64px] overflow-hidden rounded-lg text-left ring-1 ring-transparent transition-all hover:ring-white/40"
+                          style={{ background: `linear-gradient(140deg, hsl(${s.payload.hue ?? 220},58%,30%), hsl(${((s.payload.hue ?? 220) + 30) % 360},48%,12%))` }}
+                        >
+                          {s.payload.poster && (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={s.payload.poster} alt="" className="absolute inset-0 h-full w-full object-cover" loading="lazy" />
+                          )}
+                          <div className="absolute inset-x-0 bottom-0 p-1.5" style={{ background: "linear-gradient(to top, rgba(11,15,25,0.9), transparent)" }}>
+                            <div className="truncate text-[10.5px] font-semibold text-white">{s.payload.title}</div>
+                            <div className="text-[9px] text-white/65">{s.payload.year}</div>
+                          </div>
+                        </button>
+                      ),
+                    )}
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* FOOTER */}
       <footer className="flex items-center justify-between px-10 py-3 text-[11px] text-fg-secondary/60">
@@ -1115,7 +1260,136 @@ function KV({ k, v, dot, accent = false, tip }: { k: string; v: string; dot?: st
   );
 }
 
-function ResultCard({ hit, rank, euclid = false }: { hit: SearchHit; rank: number; euclid?: boolean }) {
+/** Known characteristics per mode. Speed column is replaced by live data when we have it. */
+const MODE_META: Array<{ key: string; speed: number; accuracy: number; ram: number; use: string }> = [
+  { key: "HNSW ef 16",  speed: 5, accuracy: 2, ram: 3, use: "autocomplete, huge traffic" },
+  { key: "HNSW ef 64",  speed: 4, accuracy: 4, ram: 3, use: "the everyday default" },
+  { key: "HNSW ef 128", speed: 3, accuracy: 4, ram: 3, use: "quality-first search" },
+  { key: "HNSW ef 512", speed: 2, accuracy: 5, ram: 3, use: "offline evaluation" },
+  { key: "Exact scan",  speed: 1, accuracy: 5, ram: 4, use: "small data, ground truth" },
+  { key: "Dot product", speed: 4, accuracy: 4, ram: 3, use: "recommender scores" },
+  { key: "Euclidean",   speed: 4, accuracy: 4, ram: 3, use: "spatial or image data" },
+  { key: "m 4",         speed: 4, accuracy: 2, ram: 5, use: "memory-tight deployments" },
+  { key: "m 64",        speed: 3, accuracy: 5, ram: 1, use: "max recall at scale" },
+  { key: "Keyword",     speed: 5, accuracy: 1, ram: 5, use: "exact names and IDs" },
+];
+
+/**
+ * What this actually costs to serve — estimated from collection configs.
+ * Vector bytes = points x dims x 4 (float32). Graph RAM ~= points x m x 12B.
+ * Estimates, labeled as such; the point is the shape of the math, not
+ * decimal precision.
+ */
+function ScalingCard({ variants }: { variants: VariantRow[] }) {
+  const DIM = 384;
+  const fmt = (bytes: number) =>
+    bytes > 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.round(bytes / 1e6)} MB`;
+  const rows = variants.map((v) => ({
+    ...v,
+    vecBytes: v.points * DIM * 4,
+    graphBytes: v.points * v.m * 12,
+  }));
+  const totVec = rows.reduce((s, r) => s + r.vecBytes, 0);
+  const totGraph = rows.reduce((s, r) => s + r.graphBytes, 0);
+  const totPoints = rows.reduce((s, r) => s + r.points, 0);
+
+  return (
+    <InsideCard
+      title="What it costs to serve"
+      lead="Estimated from the live configs. Vectors are memmapped from disk; the HNSW graph lives in RAM."
+    >
+      <div className="mt-3 space-y-1">
+        <div className="grid items-center gap-2 px-2 text-[10px] tracking-wide text-fg-secondary/70"
+          style={{ gridTemplateColumns: "1fr 70px 76px 76px" }}>
+          <span>Collection</span><span>Points</span><span>Disk (vec)</span><span>RAM (graph)</span>
+        </div>
+        {rows.map((r) => (
+          <div key={r.key}
+            className="grid items-center gap-2 rounded-lg bg-white/[0.03] ring-1 ring-white/[0.05] px-2 py-1.5 text-[12px]"
+            style={{ gridTemplateColumns: "1fr 70px 76px 76px" }}>
+            <span className="truncate font-mono text-fg-primary/90">{r.name}</span>
+            <span className="text-fg-secondary">{(r.points / 1000).toFixed(0)}K</span>
+            <span className="text-fg-primary">{fmt(r.vecBytes)}</span>
+            <span className="text-fg-primary">{fmt(r.graphBytes)}</span>
+          </div>
+        ))}
+        {rows.length > 0 && (
+          <div className="grid items-center gap-2 px-2 pt-1 text-[12px] font-medium"
+            style={{ gridTemplateColumns: "1fr 70px 76px 76px" }}>
+            <span className="text-fg-secondary">Total</span>
+            <span className="text-fg-primary">{(totPoints / 1000).toFixed(0)}K</span>
+            <span className="text-qdrant-red">{fmt(totVec)}</span>
+            <span className="text-qdrant-red">{fmt(totGraph)}</span>
+          </div>
+        )}
+      </div>
+      <div className="mt-4 space-y-1.5 text-[13px] leading-relaxed text-fg-secondary">
+        <p><span className="text-fg-primary">When to scale up:</span> graph RAM near your node&rsquo;s memory, p95 creeping, or ingest stalling the optimizer.</p>
+        <p><span className="text-fg-primary">Levers before bigger hardware:</span> vectors on disk (done here), lower m, quantization for 4 to 32x smaller vectors, then shard across nodes.</p>
+        <p>Search stays fast as data grows because HNSW work scales with <span className="text-fg-primary">log N</span>, not N. Same ef touches roughly the same node count at 100K as at 10K.</p>
+      </div>
+    </InsideCard>
+  );
+}
+
+function VerdictCard({ modeStats }: { modeStats: Record<string, number[]> }) {
+  const avg = (k: string) => {
+    const a = modeStats[k];
+    return a?.length ? Math.round(a.reduce((s, v) => s + v, 0) / a.length) : null;
+  };
+  const measured = MODE_META.filter((m) => avg(m.key) != null);
+  const ef64 = avg("HNSW ef 64");
+  const exact = avg("Exact scan");
+  const slowdown = ef64 && exact ? Math.round((exact / ef64) * 10) / 10 : null;
+
+  return (
+    <InsideCard
+      title="Which should you use?"
+      lead="Measured speed from this session, plus what each choice costs."
+    >
+      <div className="mt-3 space-y-1">
+        <div className="grid items-center gap-2 text-[10px] tracking-wide text-fg-secondary/70 px-2"
+          style={{ gridTemplateColumns: "94px 56px 62px 62px 1fr" }}>
+          <span /><span>Speed</span><span>Accuracy</span><span>RAM cost</span><span>Best for</span>
+        </div>
+        {MODE_META.map((m) => {
+          const ms = avg(m.key);
+          return (
+            <div key={m.key}
+              className={`grid items-center gap-2 rounded-lg px-2 py-1.5 text-[12px] ${ms != null ? "bg-white/[0.04] ring-1 ring-white/[0.06]" : "opacity-45"}`}
+              style={{ gridTemplateColumns: "94px 56px 62px 62px 1fr" }}>
+              <span className="truncate text-fg-primary/90">{m.key}</span>
+              <span className="font-medium text-fg-primary">{ms != null ? `${ms}ms` : <Bar level={m.speed} />}</span>
+              <Bar level={m.accuracy} accent />
+              <Bar level={6 - m.ram} />
+              <span className="truncate text-fg-secondary">{m.use}</span>
+            </div>
+          );
+        })}
+      </div>
+      <div className="mt-4 rounded-xl bg-qdrant-red/10 ring-1 ring-qdrant-red/25 px-4 py-3 text-[13px] leading-relaxed text-fg-primary/90">
+        <span className="font-semibold text-qdrant-red">Our pick: </span>
+        HNSW with ef 64 on cosine. Near-perfect accuracy, one graph in RAM
+        {ef64 ? <>, measured <span className="text-fg-primary font-medium">{ef64} ms</span> here</> : null}
+        {slowdown ? <>. Exact scan was <span className="text-fg-primary font-medium">{slowdown}×</span> slower for the same answers</> : null}.
+        Dim rows have not run yet — pick them in Settings to fill this in.
+      </div>
+    </InsideCard>
+  );
+}
+
+function Bar({ level, accent = false }: { level: number; accent?: boolean }) {
+  return (
+    <span className="flex gap-0.5">
+      {[1, 2, 3, 4, 5].map((i) => (
+        <span key={i} className="h-1.5 w-1.5 rounded-sm"
+          style={{ background: i <= level ? (accent ? "#6047FF" : "#DC244C") : "rgba(78,83,102,0.35)" }} />
+      ))}
+    </span>
+  );
+}
+
+function ResultCard({ hit, rank, euclid = false, onClick }: { hit: SearchHit; rank: number; euclid?: boolean; onClick?: () => void }) {
   const hue = hit.payload.hue ?? 220;
   // Euclidean scores are distances (lower is better) — show raw, not %.
   const scoreLabel = euclid ? hit.score.toFixed(2) : `${Math.round(hit.score * 100)}%`;
@@ -1125,9 +1399,19 @@ function ResultCard({ hit, rank, euclid = false }: { hit: SearchHit; rank: numbe
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0 }}
       transition={{ duration: 0.35, delay: rank * 0.09 }}
-      className="relative h-[118px] overflow-hidden rounded-2xl"
+      onClick={onClick}
+      className="relative h-[118px] overflow-hidden rounded-2xl cursor-pointer ring-1 ring-transparent transition-all hover:ring-white/40 hover:scale-[1.03]"
       style={{ background: `linear-gradient(140deg, hsl(${hue},60%,30%) 0%, hsl(${(hue + 30) % 360},50%,12%) 100%)` }}
     >
+      {hit.payload.poster && (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={hit.payload.poster}
+          alt=""
+          className="absolute inset-0 h-full w-full object-cover"
+          loading="lazy"
+        />
+      )}
       <div aria-hidden className="absolute inset-0" style={{ background: `radial-gradient(circle at 22% 18%, hsla(${hue},85%,70%,0.35) 0%, transparent 55%)` }} />
       <div aria-hidden className="absolute inset-x-0 bottom-0 h-2/3" style={{ background: "linear-gradient(to top, rgba(11,15,25,0.9), transparent)" }} />
       <div className="absolute left-2.5 top-2.5 rounded-full bg-black/45 px-2 py-0.5 text-[10px] font-semibold text-white/95 backdrop-blur">

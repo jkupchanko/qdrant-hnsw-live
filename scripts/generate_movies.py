@@ -20,7 +20,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SEED_PATH = ROOT / "data" / "movies.json"
-TARGET_TOTAL = 10000
+TARGET_TOTAL = 100000
 SEED = 20260710
 random.seed(SEED)
 
@@ -320,11 +320,18 @@ def main() -> None:
 
     synthetic: list[dict] = []
     seen_titles = {item["title"] for item in seeds}
+    SEQUELS = [" II", " III", " IV", " V", " VI", " VII"]
     for _ in range(needed):
-        while True:
-            item = generate_one(next_id)
-            if item["title"] not in seen_titles:
-                break
+        item = generate_one(next_id)
+        base = item["title"]
+        if base in seen_titles:
+            # Sequel-ify on collision — at 100K scale the title space repeats.
+            for suffix in SEQUELS:
+                if base + suffix not in seen_titles:
+                    item["title"] = base + suffix
+                    break
+            else:
+                item["title"] = f"{base} ({item['year']}-{next_id})"
         seen_titles.add(item["title"])
         synthetic.append(item)
         next_id += 1

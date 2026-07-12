@@ -144,6 +144,51 @@ export async function keywordSearch(params: {
   return { points: res.result.points, timeMs: res.time * 1000 };
 }
 
+export interface VariantInfo {
+  key: string;
+  name: string;
+  status: string;
+  points: number;
+  distance: string;
+  m: number;
+}
+
+/** Status + config of every variant collection, for the scaling story. */
+export async function getVariantsInfo(): Promise<VariantInfo[]> {
+  const { url, apiKey } = requireEnv();
+  const out: VariantInfo[] = [];
+  await Promise.all(
+    Object.entries(VARIANTS).map(async ([key, name]) => {
+      try {
+        const r = await fetch(`${url}/collections/${name}`, {
+          headers: { "api-key": apiKey },
+          cache: "no-store",
+        });
+        if (!r.ok) return;
+        const d = (await r.json()) as {
+          result: {
+            status: string;
+            points_count: number;
+            config: {
+              params: { vectors: { distance: string } };
+              hnsw_config: { m: number };
+            };
+          };
+        };
+        out.push({
+          key,
+          name,
+          status: d.result.status,
+          points: d.result.points_count,
+          distance: d.result.config.params.vectors.distance,
+          m: d.result.config.hnsw_config.m,
+        });
+      } catch { /* variant missing — fine */ }
+    }),
+  );
+  return out.sort((a, b) => a.key.localeCompare(b.key));
+}
+
 /** GET /collections/{name} — status, counts, HNSW config, payload schema. */
 export async function getCollectionInfo(): Promise<CollectionInfo> {
   const { url, apiKey } = requireEnv();

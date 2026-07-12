@@ -46,3 +46,7 @@ __pycache__/
 *.pyc
 env/
 .venv/
+
+# downloaded corpus cache (46MB tarball + extraction)
+data/cache/
+data/movies.json

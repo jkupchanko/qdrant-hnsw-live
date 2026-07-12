@@ -97,10 +97,24 @@ def load_movies() -> list[dict]:
 
 
 def embed_items(model: SentenceTransformer, items: list[dict]) -> np.ndarray:
+    import hashlib
     texts = [searchable_text(item) for item in items]
+    # Cache embeddings by content hash — payload-only changes (posters etc.)
+    # then skip the ~20 minute re-embed entirely.
+    digest = hashlib.md5(json.dumps(texts, ensure_ascii=False).encode()).hexdigest()[:16]
+    cache_dir = ROOT / "data" / "cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_file = cache_dir / f"vectors_{digest}.npy"
+    if cache_file.exists():
+        print(f"  Loading cached embeddings ({cache_file.name})...")
+        return np.load(cache_file)
     print(f"  Embedding {len(texts)} items...")
-    vectors = model.encode(texts, show_progress_bar=True, normalize_embeddings=True)
-    return np.asarray(vectors, dtype=np.float32)
+    vectors = np.asarray(
+        model.encode(texts, show_progress_bar=True, normalize_embeddings=True),
+        dtype=np.float32,
+    )
+    np.save(cache_file, vectors)
+    return vectors
 
 
 def project_2d(vectors: np.ndarray) -> np.ndarray:
@@ -147,19 +161,23 @@ def upload_to_qdrant(items: list[dict], vectors: np.ndarray) -> None:
                 "mood": item.get("mood", []),
                 "hue": item.get("hue", 220),
                 "description": item["description"],
+                **({"poster": item["poster"]} if item.get("poster") else {}),
             },
         )
         for item, vector in zip(items, vectors)
     ]
 
-    BATCH = 500
+    BATCH = 1000
     for name, distance, m in VARIANTS:
         if client.collection_exists(name):
             print(f"  Recreating '{name}'...")
             client.delete_collection(name)
         client.create_collection(
             collection_name=name,
-            vectors_config=models.VectorParams(size=VECTOR_SIZE, distance=distance),
+            # on_disk: at 100K x 5 variants the raw vectors would exhaust the
+            # free tier's RAM — memmapping them from disk is the production
+            # answer, and the demo's scaling story.
+            vectors_config=models.VectorParams(size=VECTOR_SIZE, distance=distance, on_disk=True),
             hnsw_config=models.HnswConfigDiff(m=m),
         )
         for field in ("genres", "mood", "director"):
@@ -183,14 +201,14 @@ def write_frontend_bundle(items: list[dict], coords: np.ndarray, query_vectors: 
 
     # Slim payload: only what the map needs to render points. The full payload
     # lives in Qdrant Cloud; the client fetches details on demand via /api/*.
+    # At 100K, every byte in this file matters: primary genre only, 3-decimal
+    # coords, no title (the map never shows one; payloads come from Qdrant).
     slim = [
         {
             "id": item["id"],
-            "title": item["title"],
-            "genres": item.get("genres", []),
-            "hue": item.get("hue", 220),
-            "x": float(c[0]),
-            "y": float(c[1]),
+            "genres": [item.get("genres", ["drama"])[0]],
+            "x": round(float(c[0]), 3),
+            "y": round(float(c[1]), 3),
         }
         for item, c in zip(items, coords)
     ]

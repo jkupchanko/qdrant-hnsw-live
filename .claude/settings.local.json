@@ -23,7 +23,12 @@
       "Bash(npm run *)",
       "Bash(npm install *)",
       "Bash(npm ls *)",
-      "Bash(npx tsc *)"
+      "Bash(npx tsc *)",
+      "Bash('C:/Users/Home Laptop/my-project/.venv/Scripts/python.exe' 'C:/Users/Home Laptop/my-project/scripts/generate_movies.py')",
+      "Bash('C:/Users/Home Laptop/my-project/.venv/Scripts/python.exe' 'C:/Users/Home Laptop/my-project/scripts/ingest.py')",
+      "Bash(\"C:/Users/Home Laptop/my-project/.venv/Scripts/python.exe\" \"C:/Users/Home Laptop/my-project/scripts/fetch_real_movies.py\")",
+      "Bash('C:/Users/Home Laptop/my-project/.venv/Scripts/python.exe' 'C:/Users/Home Laptop/my-project/scripts/fetch_real_movies.py')",
+      "Bash(python -c ' *)"
     ]
   }
 }

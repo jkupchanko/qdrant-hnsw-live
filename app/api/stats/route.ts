@@ -1,14 +1,14 @@
 import { NextResponse } from "next/server";
-import { getCollectionInfo } from "@/lib/qdrant";
+import { getCollectionInfo, getVariantsInfo } from "@/lib/qdrant";
 
 export const runtime = "nodejs";
 
-/** GET /api/stats — returns live cluster / collection info. */
+/** GET /api/stats — live cluster info + all variant collections. */
 export async function GET() {
   try {
-    const info = await getCollectionInfo();
+    const [info, variants] = await Promise.all([getCollectionInfo(), getVariantsInfo()]);
     return NextResponse.json(
-      { info },
+      { info, variants },
       { headers: { "cache-control": "no-store" } },
     );
   } catch (err) {
