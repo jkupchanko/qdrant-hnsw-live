@@ -7,7 +7,7 @@ import { GENRE_COLOR, GENRE_ORDER, colorFor } from "@/lib/genres";
 import type { Movie, Query, SearchHit } from "@/lib/types";
 import { QdrantLogo } from "./QdrantLogo";
 import QRCode from "qrcode";
-import { embedText } from "@/lib/embed";
+import { embedText, rerankPairs } from "@/lib/embed";
 
 const REPO_URL = "https://github.com/jkupchanko/qdrant-hnsw-live";
 
@@ -141,6 +141,11 @@ export function HNSWLive() {
     keywordCount: number | null;
     keywordTitles: string[];
     euclid: boolean;
+    reranked: boolean;
+    rerankMs: number;
+    fetched: number;
+    /** For re-ranked hits: original ANN rank per displayed position. */
+    origRanks: number[];
   } | null>(null);
 
   // Manual override wins; otherwise ef auto-cycles so the booth varies itself.
@@ -154,6 +159,7 @@ export function HNSWLive() {
   const [showDetails, setShowDetails] = useState(false);
   const [consoleOpen, setConsoleOpen] = useState(true);
   const [compareKeyword, setCompareKeyword] = useState(false);
+  const [rerankMode, setRerankMode] = useState(false);
 
   // Index variants — separate collections, same data. Distance and m are
   // build-time, so picking one routes to the matching collection.
@@ -307,7 +313,8 @@ export function HNSWLive() {
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
             vector: current.vector,
-            limit: topK,
+            // Re-ranking oversamples: fetch 3x candidates, cross-encoder trims
+            limit: rerankMode ? Math.min(topK * 3, 20) : topK,
             ef: currentEf,
             exact: exactMode,
             variant,
@@ -336,7 +343,31 @@ export function HNSWLive() {
           return;
         }
         setError(null);
-        const hits = data.hits;
+        // Stage 2: cross-encoder re-rank in the browser (when enabled).
+        let hits2 = data.hits;
+        let reranked = false;
+        let rerankMs = 0;
+        const fetched = data.hits.length;
+        let origRanks = hits2.map((_, i) => i);
+        if (rerankMode && hits2.length > 1) {
+          try {
+            const t0 = performance.now();
+            const scores = await rerankPairs(
+              current.text,
+              hits2.map((h) => (h.payload.description ?? h.payload.title).slice(0, 500)),
+            );
+            rerankMs = Math.round(performance.now() - t0);
+            const order = hits2
+              .map((h, i) => ({ h, i, s: scores[i] ?? -Infinity }))
+              .sort((a, b) => b.s - a.s)
+              .slice(0, topK);
+            hits2 = order.map((o) => o.h);
+            origRanks = order.map((o) => o.i);
+            reranked = true;
+          } catch { /* rerank failed — show ANN order, no drama */ }
+        }
+        const hits = hits2;
+
         const kw = (await kwPromise) as { hits?: Array<{ title: string }> } | null;
         const nodesVisited = exactMode
           ? movies.length
@@ -354,6 +385,10 @@ export function HNSWLive() {
           keywordCount: compareKeyword ? (kw?.hits?.length ?? 0) : null,
           keywordTitles: kw?.hits?.slice(0, 3).map((h) => h.title) ?? [],
           euclid: distanceSel === "euclid",
+          reranked,
+          rerankMs,
+          fetched,
+          origRanks,
         });
         latencyHistoryRef.current = [...latencyHistoryRef.current.slice(-(LAT_HISTORY - 1)), took];
         setTotalOps((n) => n + 1);
@@ -625,6 +660,10 @@ export function HNSWLive() {
                   <div className="text-xl font-semibold tracking-tight-brand text-fg-primary">Set it up.</div>
                   <div className="mt-0.5 mb-4 text-[13px] text-fg-secondary">Every choice applies to the next search.</div>
                   <div className="flex-1 min-h-0 overflow-y-auto pr-2 -mr-2 space-y-3.5">
+                    <SetupRow label="Re-rank (cross-encoder)">
+                      <EfPill active={!rerankMode} onClick={() => setRerankMode(false)}>Off</EfPill>
+                      <EfPill active={rerankMode} onClick={() => setRerankMode(true)}>On</EfPill>
+                    </SetupRow>
                     <SetupRow label="Keyword compare">
                       <EfPill active={!compareKeyword} onClick={() => setCompareKeyword(false)}>Off</EfPill>
                       <EfPill active={compareKeyword} onClick={() => setCompareKeyword(true)}>On</EfPill>
@@ -857,6 +896,11 @@ export function HNSWLive() {
                     </div>
                   </div>
                   <div className="text-right text-xs text-fg-secondary/70">
+                    {latest.reranked && (
+                      <div>
+                        <span className="text-qdrant-red">re-ranked</span> {latest.fetched} → {latest.hits.length} in {latest.rerankMs} ms, in-browser
+                      </div>
+                    )}
                     {((latest.nodesVisited / Math.max(movies.length, 1)) * 100).toFixed(1)}% of the data touched
                   </div>
                 </div>
@@ -865,7 +909,14 @@ export function HNSWLive() {
                   style={{ gridTemplateColumns: `repeat(${Math.min(latest.limit, 6)}, 1fr)` }}
                 >
                   {latest.hits.slice(0, latest.limit).map((h, i) => (
-                    <ResultCard key={`${latest.text}-${h.id}`} hit={h} rank={i} euclid={latest.euclid} onClick={() => openDetail(h)} />
+                    <ResultCard
+                      key={`${latest.text}-${h.id}`}
+                      hit={h}
+                      rank={i}
+                      euclid={latest.euclid}
+                      move={latest.reranked ? (latest.origRanks[i] ?? i) - i : 0}
+                      onClick={() => openDetail(h)}
+                    />
                   ))}
                 </div>
               </motion.div>
@@ -1391,7 +1442,7 @@ function Bar({ level, accent = false }: { level: number; accent?: boolean }) {
   );
 }
 
-function ResultCard({ hit, rank, euclid = false, onClick }: { hit: SearchHit; rank: number; euclid?: boolean; onClick?: () => void }) {
+function ResultCard({ hit, rank, euclid = false, move = 0, onClick }: { hit: SearchHit; rank: number; euclid?: boolean; move?: number; onClick?: () => void }) {
   const hue = hit.payload.hue ?? 220;
   // Euclidean scores are distances (lower is better) — show raw, not %.
   const scoreLabel = euclid ? hit.score.toFixed(2) : `${Math.round(hit.score * 100)}%`;
@@ -1416,8 +1467,10 @@ function ResultCard({ hit, rank, euclid = false, onClick }: { hit: SearchHit; ra
       )}
       <div aria-hidden className="absolute inset-0" style={{ background: `radial-gradient(circle at 22% 18%, hsla(${hue},85%,70%,0.35) 0%, transparent 55%)` }} />
       <div aria-hidden className="absolute inset-x-0 bottom-0 h-2/3" style={{ background: "linear-gradient(to top, rgba(11,15,25,0.9), transparent)" }} />
-      <div className="absolute left-2.5 top-2.5 rounded-full bg-black/45 px-2 py-0.5 text-[10px] font-semibold text-white/95 backdrop-blur">
+      <div className="absolute left-2.5 top-2.5 flex items-center gap-1 rounded-full bg-black/45 px-2 py-0.5 text-[10px] font-semibold text-white/95 backdrop-blur">
         #{rank + 1}
+        {move > 0 && <span style={{ color: "#4CAF50" }}>↑{move}</span>}
+        {move < 0 && <span className="text-white/50">↓{-move}</span>}
       </div>
       <div className="absolute right-2.5 top-2.5 rounded-full bg-black/45 px-2 py-0.5 text-[10px] font-medium text-white/95 backdrop-blur">
         {scoreLabel}

@@ -37,6 +37,51 @@ export async function embedText(text: string): Promise<number[]> {
   }
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let cePromise: Promise<any> | null = null;
+
+/**
+ * Cross-encoder re-ranking (ms-marco-MiniLM-L-6-v2): scores each
+ * (query, document) pair jointly — slower but sharper than the bi-encoder.
+ * Returns one relevance logit per doc; higher = more relevant.
+ */
+export async function rerankPairs(query: string, docs: string[]): Promise<number[]> {
+  if (!cePromise) {
+    cePromise = import("@xenova/transformers")
+      .then(async (m) => {
+        m.env.allowLocalModels = false;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const onnx = (m.env as any).backends?.onnx;
+        if (onnx?.wasm) {
+          onnx.wasm.numThreads = 1;
+          onnx.wasm.proxy = false;
+        }
+        const id = "Xenova/ms-marco-MiniLM-L-6-v2";
+        const [tokenizer, model] = await Promise.all([
+          m.AutoTokenizer.from_pretrained(id),
+          m.AutoModelForSequenceClassification.from_pretrained(id),
+        ]);
+        return { tokenizer, model };
+      })
+      .catch((e) => {
+        cePromise = null;
+        throw normalizeError(e);
+      });
+  }
+  try {
+    const { tokenizer, model } = await cePromise;
+    const inputs = tokenizer(Array(docs.length).fill(query), {
+      text_pair: docs,
+      padding: true,
+      truncation: true,
+    });
+    const { logits } = await model(inputs);
+    return Array.from(logits.data as Float32Array);
+  } catch (e) {
+    throw normalizeError(e);
+  }
+}
+
 function normalizeError(e: unknown): Error {
   if (e instanceof Error) return e;
   // Worker/wasm failures often reject with a browser Event, not an Error.
