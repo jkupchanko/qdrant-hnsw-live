@@ -89,6 +89,24 @@ export function HNSWLive() {
   const [typed, setTyped] = useState("");
   const [cycle, setCycle] = useState(0);
 
+  // Hovering a highlighted match point on the map → tooltip; click → detail.
+  const [hoverHit, setHoverHit] = useState<{ hit: SearchHit; x: number; y: number } | null>(null);
+  const findHitAt = (x: number, y: number): { hit: SearchHit; x: number; y: number } | null => {
+    if (!latest || !(phase === "results" || phase === "hold")) return null;
+    for (const h of latest.hits) {
+      const p = pointByIdRef.current.get(h.id);
+      if (p && Math.hypot(p.tx - x, p.ty - y) < 14) return { hit: h, x: p.tx, y: p.ty };
+    }
+    return null;
+  };
+  const handleMapMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    setHoverHit(findHitAt(e.nativeEvent.offsetX, e.nativeEvent.offsetY));
+  };
+  const handleMapClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const found = findHitAt(e.nativeEvent.offsetX, e.nativeEvent.offsetY);
+    if (found) openDetail(found.hit);
+  };
+
   // Clicked result → detail modal with recommend-powered "more like this".
   const [selected, setSelected] = useState<SearchHit | null>(null);
   const [similar, setSimilar] = useState<SearchHit[]>([]);
@@ -603,7 +621,38 @@ export function HNSWLive() {
       <main className={`relative flex-1 min-h-0 flex-col ${tab === "demo" ? "flex" : "hidden"}`}>
         {/* Map fills the stage */}
         <div className="absolute inset-x-6 top-0 bottom-6 rounded-3xl overflow-hidden card">
-          <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
+          <canvas
+            ref={canvasRef}
+            onMouseMove={handleMapMove}
+            onMouseLeave={() => setHoverHit(null)}
+            onClick={handleMapClick}
+            className={`absolute inset-0 h-full w-full ${hoverHit ? "cursor-pointer" : ""}`}
+          />
+
+          {/* Hover tooltip for highlighted matches on the map */}
+          {hoverHit && (
+            <div
+              className="pointer-events-none absolute z-20 flex items-center gap-2.5 rounded-xl card-glass-strong px-3 py-2"
+              style={{
+                left: Math.min(Math.max(hoverHit.x, 110), 9999),
+                top: hoverHit.y - 12,
+                transform: "translate(-50%, -100%)",
+              }}
+            >
+              {hoverHit.hit.payload.poster && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={hoverHit.hit.payload.poster} alt="" className="h-12 w-9 rounded-md object-cover" />
+              )}
+              <div>
+                <div className="text-[12px] font-semibold text-fg-primary whitespace-nowrap">
+                  {hoverHit.hit.payload.title}
+                </div>
+                <div className="text-[10px] text-fg-secondary whitespace-nowrap">
+                  {hoverHit.hit.payload.year} · match {Math.round(hoverHit.hit.score * 100)}% · click for details
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* PIPELINE RAIL — the whole process, in order, always visible */}
           <div className="absolute top-5 left-1/2 -translate-x-1/2 z-10">
