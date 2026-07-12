@@ -16,6 +16,7 @@ interface Body {
     mood?: string;
     yearFrom?: number;
     yearTo?: number;
+    tenant?: string;
   };
 }
 
@@ -39,6 +40,7 @@ export async function POST(req: Request) {
   >;
   if (body.filter?.genre) must.push({ key: "genres", match: { value: body.filter.genre } });
   if (body.filter?.mood) must.push({ key: "mood", match: { value: body.filter.mood } });
+  if (body.filter?.tenant) must.push({ key: "tenant", match: { value: body.filter.tenant } });
   if (body.filter?.yearFrom != null || body.filter?.yearTo != null) {
     must.push({ key: "year", range: { gte: body.filter?.yearFrom, lte: body.filter?.yearTo } });
   }

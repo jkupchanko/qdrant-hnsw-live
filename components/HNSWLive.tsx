@@ -196,6 +196,7 @@ export function HNSWLive() {
   const [threshold, setThreshold] = useState<number | null>(null);
   const [decade, setDecade] = useState<[number, number] | null>(null);
   const [pace, setPace] = useState<number>(1); // duration multiplier
+  const [tenant, setTenant] = useState<string | null>(null);
 
   const resetDefaults = () => {
     setEfOverride(null);
@@ -208,6 +209,8 @@ export function HNSWLive() {
     setThreshold(null);
     setDecade(null);
     setPace(1);
+    setTenant(null);
+    setRerankMode(false);
   };
 
   const latencyHistoryRef = useRef<number[]>([]);
@@ -339,11 +342,12 @@ export function HNSWLive() {
             exact: exactMode,
             variant,
             scoreThreshold: threshold ?? undefined,
-            filter: genreFilter || decade
+            filter: genreFilter || decade || tenant
               ? {
                   genre: genreFilter ?? undefined,
                   yearFrom: decade?.[0],
                   yearTo: decade?.[1],
+                  tenant: tenant ?? undefined,
                 }
               : undefined,
           }),
@@ -599,7 +603,8 @@ export function HNSWLive() {
   const searching = phase === "encoding" || phase === "walking";
 
   return (
-    <div className="relative z-10 flex h-screen w-screen flex-col overflow-hidden">
+    <div className="relative z-10 flex h-screen w-screen flex-col overflow-hidden select-none">
+      <KioskGuard />
       {/* HEADER */}
       <header className="relative flex items-center justify-between border-b border-white/[0.05] px-10 pt-6 pb-5">
         <div className="flex items-center gap-4">
@@ -770,6 +775,12 @@ export function HNSWLive() {
                         <EfPill key={t} active={threshold === t} onClick={() => setThreshold(t)}>{Math.round(t * 100)}%</EfPill>
                       ))}
                     </SetupRow>
+                    <SetupRow label="Tenant, isolated catalogs">
+                      <EfPill active={tenant == null} onClick={() => setTenant(null)}>All</EfPill>
+                      {[["StreamFlix", "streamflix"], ["CineMax", "cinemax"], ["NicheCast", "nichecast"]].map(([label, v]) => (
+                        <EfPill key={v} active={tenant === v} onClick={() => setTenant(v)}>{label}</EfPill>
+                      ))}
+                    </SetupRow>
                     <SetupRow label="Pace">
                       <EfPill active={pace === 1.5} onClick={() => setPace(1.5)}>Relaxed</EfPill>
                       <EfPill active={pace === 1} onClick={() => setPace(1)}>Normal</EfPill>
@@ -845,6 +856,7 @@ export function HNSWLive() {
                     : `HNSW touched ~${latest.nodesVisited.toLocaleString()} of ${movies.length.toLocaleString()} vectors (${((latest.nodesVisited / Math.max(movies.length, 1)) * 100).toFixed(1)}%).`}
                   {" "}Scores are cosine similarity.
                 </div>
+                <CopyCode latest={latest} />
               </motion.div>
             )}
           </AnimatePresence>
@@ -1119,6 +1131,7 @@ export function HNSWLive() {
               <div className="mt-4 rounded-lg bg-white/[0.03] ring-1 ring-white/[0.05] p-3">
                 <Sparkline values={stats.latencies} color="#DC244C" />
               </div>
+              <BurstTest queries={queries} />
               {/* Speed by mode — fills in as the loop cycles the options */}
               <div className="mt-4 space-y-1">
                 {Object.entries(modeStatsRef.current)
@@ -1298,6 +1311,174 @@ export function HNSWLive() {
 }
 
 /* ── pieces ── */
+
+/**
+ * Booth survival kit: keep the screen awake, reload every 12h to stay
+ * memory-fresh across a multi-day event, and offer one-tap fullscreen.
+ * Renders only the fullscreen pill (when not already fullscreen).
+ */
+function KioskGuard() {
+  const [isFullscreen, setIsFullscreen] = useState(true);
+  useEffect(() => {
+    // Screen wake lock — reacquire whenever the tab becomes visible again
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let lock: any = null;
+    const acquire = async () => {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        lock = await (navigator as any).wakeLock?.request("screen");
+      } catch { /* unsupported or denied — harmless */ }
+    };
+    acquire();
+    const onVis = () => { if (document.visibilityState === "visible") acquire(); };
+    document.addEventListener("visibilitychange", onVis);
+
+    // Multi-day hygiene: a fresh page every 12 hours
+    const reload = setTimeout(() => window.location.reload(), 12 * 3600 * 1000);
+
+    const onFs = () => setIsFullscreen(!!document.fullscreenElement);
+    onFs();
+    document.addEventListener("fullscreenchange", onFs);
+    return () => {
+      document.removeEventListener("visibilitychange", onVis);
+      document.removeEventListener("fullscreenchange", onFs);
+      clearTimeout(reload);
+      lock?.release?.();
+    };
+  }, []);
+
+  if (isFullscreen) return null;
+  return (
+    <button
+      onClick={() => document.documentElement.requestFullscreen().catch(() => {})}
+      className="fixed bottom-3 right-3 z-40 rounded-md card-glass-strong px-3 py-1.5 text-[11px] text-fg-secondary hover:text-fg-primary transition-colors"
+    >
+      Fullscreen
+    </button>
+  );
+}
+
+/** Take-home code: the current request as a paste-ready snippet. */
+function CopyCode({ latest }: {
+  latest: { text: string; ef: number; exact: boolean; limit: number; genre: string | null };
+}) {
+  const [copied, setCopied] = useState<"py" | "ts" | null>(null);
+  const filterPy = latest.genre
+    ? `\n    query_filter=models.Filter(must=[models.FieldCondition(key="genres", match=models.MatchValue(value="${latest.genre}"))]),`
+    : "";
+  const py = `from qdrant_client import QdrantClient, models
+
+client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
+hits = client.search(
+    collection_name="movies",
+    query_vector=embed("${latest.text}"),  # any 384-d embedding
+    limit=${latest.limit},${filterPy}
+    search_params=models.SearchParams(hnsw_ef=${latest.ef}, exact=${latest.exact ? "True" : "False"}),
+)`;
+  const ts = `const res = await fetch(\`\${QDRANT_URL}/collections/movies/points/search\`, {
+  method: "POST",
+  headers: { "api-key": QDRANT_API_KEY, "content-type": "application/json" },
+  body: JSON.stringify({
+    vector: await embed("${latest.text}"), // any 384-d embedding
+    limit: ${latest.limit},${latest.genre ? `\n    filter: { must: [{ key: "genres", match: { value: "${latest.genre}" } }] },` : ""}
+    params: { hnsw_ef: ${latest.ef}, exact: ${latest.exact} },
+    with_payload: true,
+  }),
+});`;
+  const copy = async (kind: "py" | "ts", text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(kind);
+      setTimeout(() => setCopied(null), 1600);
+    } catch { /* clipboard blocked — no drama */ }
+  };
+  return (
+    <div className="mt-3 flex items-center gap-2">
+      <span className="text-[10px] tracking-wide text-fg-secondary/70">Take it home:</span>
+      <button
+        onClick={() => copy("py", py)}
+        className="rounded bg-white/[0.05] ring-1 ring-white/[0.08] px-2.5 py-1 text-[11px] text-fg-primary hover:bg-white/[0.08] transition-colors"
+      >
+        {copied === "py" ? "Copied ✓" : "Copy Python"}
+      </button>
+      <button
+        onClick={() => copy("ts", ts)}
+        className="rounded bg-white/[0.05] ring-1 ring-white/[0.08] px-2.5 py-1 text-[11px] text-fg-primary hover:bg-white/[0.08] transition-colors"
+      >
+        {copied === "ts" ? "Copied ✓" : "Copy TypeScript"}
+      </button>
+    </div>
+  );
+}
+
+/**
+ * Burst mode: 20 parallel searches against the cluster, proving concurrency.
+ * Renders inside "The numbers" card.
+ */
+function BurstTest({ queries }: { queries: Query[] }) {
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState<{ wall: number; p50: number; p95: number; lats: number[] } | null>(null);
+
+  const run = async () => {
+    if (running || queries.length === 0) return;
+    setRunning(true);
+    const picks = Array.from({ length: 20 }, () => queries[Math.floor(Math.random() * queries.length)]);
+    const t0 = performance.now();
+    const lats = await Promise.all(
+      picks.map(async (q) => {
+        const s = performance.now();
+        try {
+          await fetch("/api/search", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ vector: q.vector, limit: 6, ef: 64 }),
+          });
+        } catch { /* count it anyway */ }
+        return performance.now() - s;
+      }),
+    );
+    const wall = Math.round(performance.now() - t0);
+    const sorted = [...lats].sort((a, b) => a - b);
+    setResult({
+      wall,
+      p50: Math.round(sorted[10]),
+      p95: Math.round(sorted[18]),
+      lats,
+    });
+    setRunning(false);
+  };
+
+  return (
+    <div className="mt-4">
+      <button
+        onClick={run}
+        disabled={running}
+        className="w-full rounded-md bg-white/[0.05] ring-1 ring-white/[0.08] py-2 text-[12px] font-medium text-fg-primary hover:bg-white/[0.08] transition-colors disabled:opacity-50"
+      >
+        {running ? "20 searches in flight…" : "Burst: 20 parallel searches"}
+      </button>
+      {result && (
+        <div className="mt-2">
+          <div className="flex items-end gap-[2px] h-10">
+            {result.lats.map((l, i) => (
+              <div
+                key={i}
+                className="flex-1 rounded-sm bg-qdrant-red/70"
+                style={{ height: `${Math.max(8, (l / Math.max(...result.lats)) * 100)}%` }}
+                title={`${Math.round(l)} ms`}
+              />
+            ))}
+          </div>
+          <div className="mt-1.5 text-[11px] text-fg-secondary">
+            all 20 done in <span className="text-fg-primary">{result.wall} ms</span> wall,
+            p50 <span className="text-fg-primary">{result.p50} ms</span>,
+            p95 <span className="text-fg-primary">{result.p95} ms</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 const STEPS: Array<{ key: string; label: string; phases: Phase[] }> = [
   { key: "text", label: "Ask", phases: ["typing"] },
