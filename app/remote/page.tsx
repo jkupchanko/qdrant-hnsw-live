@@ -65,15 +65,29 @@ export default function RemotePage() {
       });
       const d = (await r.json()) as { ok?: boolean; id?: number; position?: number };
       if (!r.ok || !d.id) throw new Error();
-      setPosition(d.position ?? 1);
+      const pos = d.position ?? 1;
+      setPosition(pos);
 
-      // Staged progress while we wait for the real summary
-      stageRef.current = setInterval(() => setStage((s) => Math.min(s + 1, STAGES.length - 1)), 3200);
+      // Each search ahead of us owns the screen for a full cycle
+      // (type + embed + walk + answer + the long hold at the end).
+      const PER_RUN_MS = 32000;
+      const queueDelay = (pos - 1) * PER_RUN_MS;
 
-      // Poll for the booth's summary, up to 45s
+      // Staged progress starts only when it's (roughly) our turn.
+      const startStages = () => {
+        stageRef.current = setInterval(() => setStage((s) => Math.min(s + 1, STAGES.length - 1)), 3200);
+      };
+      if (queueDelay > 0) {
+        stageRef.current = setTimeout(startStages, queueDelay) as unknown as ReturnType<typeof setInterval>;
+      } else {
+        startStages();
+      }
+
+      // Poll for the booth's summary — budget for the whole line ahead.
       const started = Date.now();
+      const deadline = 45000 + queueDelay;
       pollRef.current = setInterval(async () => {
-        if (Date.now() - started > 45000) {
+        if (Date.now() - started > deadline) {
           stopTimers();
           setPhase("timeout");
           return;
@@ -209,9 +223,9 @@ export default function RemotePage() {
             Watch the big screen.
           </h1>
           <p className="mt-1 mb-4 text-center text-sm text-fg-secondary">&ldquo;{text.trim()}&rdquo;</p>
-          {position > 1 && (
+          {position > 1 && stage === 0 && (
             <div className="mb-4 rounded-lg bg-qdrant-red/10 ring-1 ring-qdrant-red/30 px-3 py-2 text-center text-[13px] text-qdrant-red">
-              You&rsquo;re #{position} in line, searches run in order
+              You&rsquo;re #{position} in line. Your turn in about {Math.max(1, Math.round(((position - 1) * 32) / 60 * 10) / 10)} min — keep watching the screen.
             </div>
           )}
           <div className="space-y-2.5">
