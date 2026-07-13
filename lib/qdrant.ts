@@ -40,10 +40,10 @@ type RangeCondition = { key: string; range: { gte?: number; lte?: number } };
 type Condition = MatchCondition | RangeCondition;
 type Filter = { must?: Condition[]; should?: Condition[]; must_not?: Condition[] };
 
-async function qdrant<T>(path: string, body: unknown): Promise<T> {
+async function qdrant<T>(path: string, body: unknown, method: "POST" | "PUT" = "POST"): Promise<T> {
   const { url, apiKey } = requireEnv();
   const r = await fetch(`${url}${path}`, {
-    method: "POST",
+    method,
     headers: {
       "content-type": "application/json",
       "api-key": apiKey,
@@ -214,7 +214,7 @@ export async function pushRemoteQuery(text: string): Promise<void> {
       vector: [0],
       payload: { text: text.slice(0, 200), ts: Date.now() },
     }],
-  });
+  }, "PUT");
 }
 
 export async function popRemoteQuery(): Promise<string | null> {
