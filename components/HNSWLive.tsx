@@ -1303,14 +1303,7 @@ export function HNSWLive() {
                 <KV k="Distance" v={clusterInfo ? clusterInfo.config.params.vectors.distance : "—"} tip="How similarity is measured. Cosine compares the angle between two vectors." />
                 <KV k="Dimensions" v={clusterInfo ? String(clusterInfo.config.params.vectors.size) : "—"} tip="The length of each vector. The embedding model decides this." />
               </div>
-              <div className="mt-4 flex flex-wrap gap-1.5">
-                {genreCounts.slice(0, 10).map(({ genre, count }) => (
-                  <span key={genre} className="rounded bg-white/[0.04] ring-1 ring-white/[0.06] px-2.5 py-1 text-[11px] text-fg-primary/85">
-                    <span className="inline-block h-1.5 w-1.5 rounded-full mr-1.5 align-middle" style={{ background: GENRE_COLOR[genre] }} />
-                    {genre} <span className="text-fg-secondary">{count.toLocaleString()}</span>
-                  </span>
-                ))}
-              </div>
+              <GenreBars counts={genreCounts} />
             </InsideCard>
 
             <InsideCard
@@ -1341,6 +1334,7 @@ export function HNSWLive() {
                 Distance and <span className="text-fg-primary">m</span> are baked in at build time,
                 so this demo keeps five copies of the index and swaps between them.
               </p>
+              <EfCurve modeStats={modeStatsRef.current} />
             </InsideCard>
 
             <InsideCard
@@ -1355,6 +1349,7 @@ export function HNSWLive() {
               <div className="mt-4 rounded-lg bg-white/[0.03] ring-1 ring-white/[0.05] p-3">
                 <Sparkline values={stats.latencies} color="#DC244C" />
               </div>
+              <LatencyHistogram lats={stats.latencies} />
               <BurstTest queries={queries} />
               {/* Speed by mode — fills in as the loop cycles the options */}
               <div className="mt-4 space-y-1">
@@ -1385,6 +1380,19 @@ export function HNSWLive() {
             <VerdictCard modeStats={modeStatsRef.current} />
 
             <ScalingCard variants={variantsInfo} />
+
+            <InsideCard
+              title="Why it stays fast"
+              lead="The whole reason vector databases exist. Checking every vector gets slower as data grows. Walking a graph barely notices."
+            >
+              <LogNChart />
+              <p className="mt-3 text-sm leading-relaxed text-fg-secondary">
+                A search here touches roughly the same few hundred vectors whether the
+                collection holds twenty thousand movies or twenty million. That is why
+                the latency you are watching today is the latency you would get in
+                production, at any scale.
+              </p>
+            </InsideCard>
 
             <InsideCard
               title="Take it home"
@@ -1656,6 +1664,124 @@ function HybridCompare({
           ))}
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Horizontal genre distribution bars — the collection's shape at a glance. */
+function GenreBars({ counts }: { counts: Array<{ genre: string; count: number }> }) {
+  const top = [...counts].sort((a, b) => b.count - a.count).slice(0, 8);
+  const max = top[0]?.count ?? 1;
+  return (
+    <div className="mt-3 space-y-1.5">
+      {top.map(({ genre, count }) => (
+        <div key={genre} className="flex items-center gap-2 text-[11px]">
+          <span className="w-24 shrink-0 truncate text-fg-primary/85">{genre}</span>
+          <span className="h-2.5 flex-1 rounded-sm bg-white/[0.04] overflow-hidden">
+            <span
+              className="block h-full rounded-sm"
+              style={{ width: `${(count / max) * 100}%`, background: GENRE_COLOR[genre] ?? "#DC244C" }}
+            />
+          </span>
+          <span className="w-12 shrink-0 text-right text-fg-secondary">{count.toLocaleString()}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Latency histogram over this session's searches. */
+function LatencyHistogram({ lats }: { lats: number[] }) {
+  if (lats.length < 3) {
+    return <div className="mt-3 text-[12px] text-fg-secondary">Histogram fills in as searches run.</div>;
+  }
+  const min = Math.min(...lats);
+  const max = Math.max(...lats, min + 1);
+  const BUCKETS = 14;
+  const buckets = Array(BUCKETS).fill(0);
+  for (const l of lats) {
+    buckets[Math.min(BUCKETS - 1, Math.floor(((l - min) / (max - min)) * BUCKETS))]++;
+  }
+  const peak = Math.max(...buckets, 1);
+  return (
+    <div className="mt-3">
+      <div className="flex items-end gap-[3px] h-14">
+        {buckets.map((b, i) => (
+          <div
+            key={i}
+            className="flex-1 rounded-sm bg-qdrant-red/60"
+            style={{ height: `${Math.max(4, (b / peak) * 100)}%`, opacity: b === 0 ? 0.15 : 1 }}
+          />
+        ))}
+      </div>
+      <div className="mt-1 flex justify-between text-[10px] text-fg-secondary/70">
+        <span>{Math.round(min)} ms</span>
+        <span>round-trip latency distribution</span>
+        <span>{Math.round(max)} ms</span>
+      </div>
+    </div>
+  );
+}
+
+/** Measured ef vs latency curve — the accuracy/speed tradeoff, from this session. */
+function EfCurve({ modeStats }: { modeStats: Record<string, number[]> }) {
+  const pts = [16, 64, 128, 512]
+    .map((ef) => {
+      const arr = modeStats[`HNSW ef ${ef}`];
+      return arr?.length ? { ef, ms: arr.reduce((s, v) => s + v, 0) / arr.length } : null;
+    })
+    .filter((p): p is { ef: number; ms: number } => p != null);
+  if (pts.length < 2) {
+    return <div className="mt-3 text-[12px] text-fg-secondary">The ef curve draws itself as the loop cycles ef values.</div>;
+  }
+  const W = 260, H = 90, PAD = 24;
+  const xs = [16, 64, 128, 512];
+  const x = (ef: number) => PAD + (Math.log2(ef) - 4) / (9 - 4) * (W - PAD * 2);
+  const maxMs = Math.max(...pts.map((p) => p.ms)) * 1.15;
+  const y = (ms: number) => H - 16 - (ms / maxMs) * (H - 32);
+  const path = pts.map((p, i) => `${i === 0 ? "M" : "L"} ${x(p.ef)} ${y(p.ms)}`).join(" ");
+  return (
+    <div className="mt-3">
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full">
+        <line x1={PAD} y1={H - 16} x2={W - PAD} y2={H - 16} stroke="rgba(255,255,255,0.12)" />
+        <path d={path} fill="none" stroke="#DC244C" strokeWidth="2" />
+        {pts.map((p) => (
+          <g key={p.ef}>
+            <circle cx={x(p.ef)} cy={y(p.ms)} r="3" fill="#DC244C" />
+            <text x={x(p.ef)} y={y(p.ms) - 7} textAnchor="middle" fill="#F0F3FA" fontSize="9">{Math.round(p.ms)}ms</text>
+            <text x={x(p.ef)} y={H - 4} textAnchor="middle" fill="#656B7F" fontSize="9">ef {p.ef}</text>
+          </g>
+        ))}
+      </svg>
+      <div className="text-[10px] text-fg-secondary/70 text-center">measured this session, higher ef = more candidates checked</div>
+    </div>
+  );
+}
+
+/** Static educational curve: why HNSW stays fast as data grows. */
+function LogNChart() {
+  const W = 300, H = 110, PAD = 26;
+  const pts = 40;
+  const linear: string[] = [];
+  const logn: string[] = [];
+  for (let i = 0; i <= pts; i++) {
+    const t = i / pts;
+    const px = PAD + t * (W - PAD * 2);
+    linear.push(`${i === 0 ? "M" : "L"} ${px} ${H - 18 - t * (H - 36)}`);
+    const lg = Math.log2(1 + t * 1023) / 10; // normalized log curve
+    logn.push(`${i === 0 ? "M" : "L"} ${px} ${H - 18 - lg * (H - 36)}`);
+  }
+  return (
+    <div className="mt-3">
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full">
+        <line x1={PAD} y1={H - 18} x2={W - PAD} y2={H - 18} stroke="rgba(255,255,255,0.12)" />
+        <path d={linear.join(" ")} fill="none" stroke="#656B7F" strokeWidth="1.8" strokeDasharray="4 3" />
+        <path d={logn.join(" ")} fill="none" stroke="#DC244C" strokeWidth="2.2" />
+        <text x={W - PAD} y={22} textAnchor="end" fill="#656B7F" fontSize="10">exact scan, work grows with N</text>
+        <text x={W - PAD} y={H - 32} textAnchor="end" fill="#DC244C" fontSize="10">HNSW, work grows with log N</text>
+        <text x={PAD} y={H - 4} fill="#656B7F" fontSize="9">1K vectors</text>
+        <text x={W - PAD} y={H - 4} textAnchor="end" fill="#656B7F" fontSize="9">1B vectors</text>
+      </svg>
     </div>
   );
 }
