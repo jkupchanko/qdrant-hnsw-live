@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
-import { pushRemoteQuery, popRemoteQuery } from "@/lib/qdrant";
+import { pushRemoteQuery, popRemoteQuery, type RemoteOptions } from "@/lib/qdrant";
 
 export const runtime = "nodejs";
 
-/** POST { text } — a phone submits a query for the booth screen. */
+/** POST { text, options? } — a phone submits a query (+ chosen options). */
 export async function POST(req: Request) {
-  let body: { text?: string };
+  let body: { text?: string; options?: RemoteOptions };
   try {
     body = await req.json();
   } catch {
@@ -14,8 +14,8 @@ export async function POST(req: Request) {
   const text = body.text?.trim();
   if (!text) return NextResponse.json({ error: "Empty query" }, { status: 400 });
   try {
-    await pushRemoteQuery(text);
-    return NextResponse.json({ ok: true });
+    const id = await pushRemoteQuery(text, body.options);
+    return NextResponse.json({ ok: true, id });
   } catch (err) {
     console.error("[/api/remote] push error:", err);
     return NextResponse.json({ error: "queue unavailable" }, { status: 500 });
@@ -24,6 +24,8 @@ export async function POST(req: Request) {
 
 /** GET — the booth polls for the next phone query (consumes it). */
 export async function GET() {
-  const text = await popRemoteQuery();
-  return NextResponse.json({ text }, { headers: { "cache-control": "no-store" } });
+  const next = await popRemoteQuery();
+  return NextResponse.json(next ?? { id: null, text: null }, {
+    headers: { "cache-control": "no-store" },
+  });
 }

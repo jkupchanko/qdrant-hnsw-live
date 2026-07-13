@@ -34,7 +34,14 @@
       "Bash(curl -sL \"https://qdrant.tech/img/qdrant-logo.svg\" -o \"/c/Users/Home Laptop/my-project/public/qdrant-logo.svg\")",
       "Bash(curl -s -o /tmp/fav_check -w \"HTTP %{http_code}, %{size_download} bytes, type: %{content_type}\\\\n\" \"http://localhost:3000/favicon.ico\")",
       "Read(//tmp/**)",
-      "Bash(\"C:/Users/Home Laptop/my-project/.venv/Scripts/python.exe\" \"C:/Users/Home Laptop/my-project/scripts/assign_tenants.py\")"
+      "Bash(\"C:/Users/Home Laptop/my-project/.venv/Scripts/python.exe\" \"C:/Users/Home Laptop/my-project/scripts/assign_tenants.py\")",
+      "WebFetch(domain:qdrant-hnsw-live.vercel.app)",
+      "Bash(curl -s -o /dev/null -w 'HTTP %{http_code}, %{size_download} bytes\\\\n' https://qdrant-hnsw-live.vercel.app/data/movies.json)",
+      "Bash(curl -s -o /dev/null -w 'HTTP %{http_code}, %{size_download} bytes\\\\n' https://qdrant-hnsw-live.vercel.app/data/queries.json)",
+      "Bash(curl -s https://qdrant-hnsw-live.vercel.app/api/stats)",
+      "Bash(npx vercel *)",
+      "Bash(curl -s -H 'api-key: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2Nlc3MiOiJtIiwic3ViamVjdCI6ImFwaS1rZXk6ZGJkNGI2NDUtNmVmMy00YWY5LWFkNDQtZDFkZDUxODc2ZDMxIn0.vYzejK_t3Z3kVZyQYQ0VufbshK9gGTnFFv9JOGtpgK8' https://ca9d6867-c3fa-48f5-bb3d-a81052fe20eb.eu-west-2-0.aws.cloud.qdrant.io/collections/remote_queries)",
+      "Bash(curl -s -X POST -H \"content-type: application/json\" -d '{\"text\":\"deploy probe\"}' \"https://qdrant-hnsw-live.vercel.app/api/remote\")"
     ]
   }
 }

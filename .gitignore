@@ -50,3 +50,6 @@ env/
 # downloaded corpus cache (46MB tarball + extraction)
 data/cache/
 data/movies.json
+
+.vercel
+.env*

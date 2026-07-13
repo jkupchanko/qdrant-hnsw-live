@@ -153,19 +153,34 @@ export function HNSWLive() {
   };
 
   // Poll the Qdrant-backed queue for queries sent from phones (/remote).
+  const pendingRemoteRef = useRef<{ id: number; text: string } | null>(null);
   useEffect(() => {
     const t = setInterval(async () => {
       if (customQ || embedState === "loading") return; // one at a time
       try {
         const r = await fetch("/api/remote", { cache: "no-store" });
         if (!r.ok) return;
-        const d = (await r.json()) as { text?: string | null };
-        if (d.text) runCustomText(d.text, "phone");
+        const d = (await r.json()) as {
+          id?: number | null;
+          text?: string | null;
+          options?: { ef?: number | null; topK?: number; genre?: string | null; rerank?: boolean; hybrid?: boolean };
+        };
+        if (!d.text || d.id == null) return;
+        // Apply the visitor's chosen options — the booth mirrors their setup.
+        const o = d.options ?? {};
+        if (o.ef !== undefined) setEfOverride(o.ef ?? null);
+        if (o.topK) setTopK(o.topK);
+        if (o.genre !== undefined) setGenreFilter(o.genre ?? null);
+        if (o.rerank !== undefined) setRerankMode(!!o.rerank);
+        if (o.hybrid !== undefined) setHybridMode(!!o.hybrid);
+        pendingRemoteRef.current = { id: d.id, text: d.text };
+        runCustomText(d.text, "phone");
       } catch { /* queue quiet */ }
     }, 2500);
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [customQ, embedState]);
+
   const [latest, setLatest] = useState<{
     text: string;
     hits: SearchHit[];
@@ -198,6 +213,38 @@ export function HNSWLive() {
   // Manual override wins; otherwise ef auto-cycles so the booth varies itself.
   const [efOverride, setEfOverride] = useState<number | null>(null);
   const currentEf = efOverride ?? EF_CYCLE[Math.floor(cycle / CYCLES_PER_EF) % EF_CYCLE.length];
+
+  // When a phone-originated search finishes, send its summary back.
+  useEffect(() => {
+    const pending = pendingRemoteRef.current;
+    if (!pending || !latest || latest.text !== pending.text) return;
+    if (phase !== "results" && phase !== "hold") return;
+    pendingRemoteRef.current = null;
+    fetch("/api/remote/result", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        id: pending.id,
+        summary: {
+          query: latest.text,
+          titles: latest.hits.slice(0, 3).map((h) => ({
+            title: h.payload.title,
+            year: h.payload.year,
+            score: Math.round(h.score * 100),
+          })),
+          count: latest.hits.length,
+          serverMs: latest.serverMs,
+          clientMs: latest.clientMs,
+          ef: latest.ef,
+          touchedPct: Number(((latest.nodesVisited / Math.max(movies.length, 1)) * 100).toFixed(1)),
+          totalVectors: movies.length,
+          rerank: latest.reranked,
+          hybrid: !!latest.hybrid,
+        },
+      }),
+    }).catch(() => { /* phone will time out gracefully */ });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [latest, phase]);
 
   // Search options a visitor can play with live.
   const [topK, setTopK] = useState(6);

@@ -194,32 +194,43 @@ export async function getVariantsInfo(): Promise<VariantInfo[]> {
    screen polls and consumes. No extra infrastructure needed. */
 
 const REMOTE = "remote_queries";
+const REMOTE_RESULTS = "remote_results";
 
-async function ensureRemoteCollection(): Promise<void> {
+export interface RemoteOptions {
+  ef?: number | null;
+  topK?: number;
+  genre?: string | null;
+  rerank?: boolean;
+  hybrid?: boolean;
+}
+
+async function ensureTinyCollection(name: string): Promise<void> {
   const { url, apiKey } = requireEnv();
-  const r = await fetch(`${url}/collections/${REMOTE}`, { headers: { "api-key": apiKey } });
+  const r = await fetch(`${url}/collections/${name}`, { headers: { "api-key": apiKey } });
   if (r.ok) return;
-  await fetch(`${url}/collections/${REMOTE}`, {
+  await fetch(`${url}/collections/${name}`, {
     method: "PUT",
     headers: { "api-key": apiKey, "content-type": "application/json" },
     body: JSON.stringify({ vectors: { size: 1, distance: "Dot" } }),
   });
 }
 
-export async function pushRemoteQuery(text: string): Promise<void> {
-  await ensureRemoteCollection();
+export async function pushRemoteQuery(text: string, options?: RemoteOptions): Promise<number> {
+  await ensureTinyCollection(REMOTE);
+  const id = Math.floor(Date.now() % 2147483647);
   await qdrant(`/collections/${REMOTE}/points?wait=true`, {
     points: [{
-      id: Math.floor(Date.now() % 2147483647),
+      id,
       vector: [0],
-      payload: { text: text.slice(0, 200), ts: Date.now() },
+      payload: { text: text.slice(0, 200), options: options ?? {}, ts: Date.now() },
     }],
   }, "PUT");
+  return id;
 }
 
-export async function popRemoteQuery(): Promise<string | null> {
+export async function popRemoteQuery(): Promise<{ id: number; text: string; options: RemoteOptions } | null> {
   try {
-    const res = await qdrant<RestResponse<{ points: Array<{ id: number; payload?: { text?: string } }> }>>(
+    const res = await qdrant<RestResponse<{ points: Array<{ id: number; payload?: { text?: string; options?: RemoteOptions } }> }>>(
       `/collections/${REMOTE}/points/scroll`,
       { limit: 5, with_payload: true },
     );
@@ -228,9 +239,34 @@ export async function popRemoteQuery(): Promise<string | null> {
     await qdrant(`/collections/${REMOTE}/points/delete?wait=true`, {
       points: points.map((p) => p.id),
     });
-    return points[0].payload?.text ?? null;
+    const first = points[0];
+    if (!first.payload?.text) return null;
+    return { id: first.id, text: first.payload.text, options: first.payload.options ?? {} };
   } catch {
     return null; // collection may not exist yet — nothing queued
+  }
+}
+
+/** The booth posts a result summary back for the phone that asked. */
+export async function pushRemoteResult(id: number, summary: unknown): Promise<void> {
+  await ensureTinyCollection(REMOTE_RESULTS);
+  await qdrant(`/collections/${REMOTE_RESULTS}/points?wait=true`, {
+    points: [{ id, vector: [0], payload: { summary, ts: Date.now() } }],
+  }, "PUT");
+}
+
+export async function popRemoteResult(id: number): Promise<unknown | null> {
+  try {
+    const res = await qdrant<RestResponse<Array<{ id: number; payload?: { summary?: unknown } }>>>(
+      `/collections/${REMOTE_RESULTS}/points`,
+      { ids: [id], with_payload: true },
+    );
+    const point = res.result[0];
+    if (!point?.payload?.summary) return null;
+    await qdrant(`/collections/${REMOTE_RESULTS}/points/delete?wait=true`, { points: [id] });
+    return point.payload.summary;
+  } catch {
+    return null;
   }
 }
 
