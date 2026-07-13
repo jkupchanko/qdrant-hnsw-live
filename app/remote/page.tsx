@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { QdrantLogo } from "@/components/QdrantLogo";
 
 interface Summary {
+  error?: string;
   query: string;
   titles: Array<{ title: string; year: number; score: number }>;
   count: number;
@@ -260,8 +261,18 @@ export default function RemotePage() {
         </div>
       )}
 
+      {/* ── DONE with error ── */}
+      {phase === "done" && summary?.error && (
+        <div className="w-full max-w-[440px] text-center">
+          <p className="text-sm text-fg-secondary">{summary.error}</p>
+          <button onClick={reset} className="mt-5 w-full rounded-lg bg-qdrant-red py-3 text-base font-semibold text-white">
+            Try again
+          </button>
+        </div>
+      )}
+
       {/* ── DONE: the summary ── */}
-      {phase === "done" && summary && (
+      {phase === "done" && summary && !summary.error && (
         <div className="w-full max-w-[440px]">
           <h1 className="text-xl font-semibold tracking-tight-brand text-fg-primary text-center">
             Here&rsquo;s what happened.

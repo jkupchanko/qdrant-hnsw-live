@@ -129,8 +129,8 @@ export function HNSWLive() {
   const [searchInput, setSearchInput] = useState("");
   const [embedState, setEmbedState] = useState<"idle" | "loading" | "error">("idle");
 
-  const runCustomText = async (text: string, source: "screen" | "phone") => {
-    if (!text || embedState === "loading") return;
+  const runCustomText = async (text: string, source: "screen" | "phone"): Promise<boolean> => {
+    if (!text || embedState === "loading") return false;
     setEmbedState("loading");
     try {
       const vector = await embedText(text);
@@ -140,8 +140,10 @@ export function HNSWLive() {
       setCustomQ({ text, vector });
       setTyped("");
       setPhase("typing");
+      return true;
     } catch {
       setEmbedState("error");
+      return false;
     }
   };
 
@@ -153,25 +155,32 @@ export function HNSWLive() {
   };
 
   // Poll the Qdrant-backed queue for queries sent from phones (/remote).
-  const pendingRemoteRef = useRef<{ id: number; text: string } | null>(null);
+  const pendingRemoteRef = useRef<{ id: number; text: string; since: number } | null>(null);
   useEffect(() => {
     const t = setInterval(async () => {
       // One at a time, and never consume the next before the previous
-      // phone's summary has been posted back.
-      if (customQ || embedState === "loading" || pendingRemoteRef.current) return;
+      // phone's summary has been posted back. But a lock can never stick:
+      // anything older than 90s is a wreck — clear it and move on.
+      const pending = pendingRemoteRef.current;
+      if (pending && Date.now() - pending.since > 90_000) {
+        pendingRemoteRef.current = null;
+      } else if (customQ || embedState === "loading" || pending) {
+        return;
+      }
       try {
         const r = await fetch("/api/remote", { cache: "no-store" });
         if (!r.ok) return;
         const d = (await r.json()) as {
           id?: number | null;
           text?: string | null;
+          waiting?: number;
           options?: { ef?: number | null; topK?: number; genre?: string | null; rerank?: boolean; hybrid?: boolean };
         };
         if (!d.text || d.id == null) {
           setRemoteWaiting(0);
           return;
         }
-        setRemoteWaiting((d as { waiting?: number }).waiting ?? 0);
+        setRemoteWaiting(d.waiting ?? 0);
         // Apply the visitor's chosen options — the booth mirrors their setup.
         const o = d.options ?? {};
         if (o.ef !== undefined) setEfOverride(o.ef ?? null);
@@ -179,8 +188,18 @@ export function HNSWLive() {
         if (o.genre !== undefined) setGenreFilter(o.genre ?? null);
         if (o.rerank !== undefined) setRerankMode(!!o.rerank);
         if (o.hybrid !== undefined) setHybridMode(!!o.hybrid);
-        pendingRemoteRef.current = { id: d.id, text: d.text };
-        runCustomText(d.text, "phone");
+        pendingRemoteRef.current = { id: d.id, text: d.text, since: Date.now() };
+        const ok = await runCustomText(d.text, "phone");
+        if (!ok) {
+          // The query was already consumed from the queue — tell the phone
+          // instead of leaving it hanging, and release the lock.
+          pendingRemoteRef.current = null;
+          fetch("/api/remote/result", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ id: d.id, summary: { error: "The screen could not run your search. Please try again." } }),
+          }).catch(() => {});
+        }
       } catch { /* queue quiet */ }
     }, 2500);
     return () => clearInterval(t);
