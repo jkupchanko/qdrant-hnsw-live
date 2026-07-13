@@ -88,6 +88,11 @@ export function HNSWLive() {
   // The loop stays parked until someone confirms the setup once. After that
   // first start it runs forever, settings card or not.
   const [started, setStarted] = useState(false);
+
+  // Hovering the distance explorer holds the embed phase open.
+  const [explorerOpen, setExplorerOpen] = useState(false);
+  const explorerOpenRef = useRef(false);
+  useEffect(() => { explorerOpenRef.current = explorerOpen; }, [explorerOpen]);
   const [qIdx, setQIdx] = useState(0);
   const [typed, setTyped] = useState("");
   const [cycle, setCycle] = useState(0);
@@ -474,11 +479,13 @@ export function HNSWLive() {
             hybrid: { kw: d.kw, kwTotal: d.kwTotal, sem: d.sem, hyb },
           });
           const waitH = Math.max(0, MIN_ENCODE_MS - (performance.now() - started));
-          setTimeout(() => {
+          const advanceH = () => {
             if (cancelled) return;
+            if (explorerOpenRef.current) { setTimeout(advanceH, 400); return; }
             if (probeRef.current) probeRef.current.bornAt = performance.now();
             setPhase("walking");
-          }, waitH);
+          };
+          setTimeout(advanceH, waitH);
           return;
         }
 
@@ -610,13 +617,15 @@ export function HNSWLive() {
           };
         }
         const wait = Math.max(0, MIN_ENCODE_MS - (performance.now() - started));
-        setTimeout(() => {
+        const advance = () => {
           if (cancelled) return;
+          if (explorerOpenRef.current) { setTimeout(advance, 400); return; } // exploring — hold
           // Restart the probe clock now — its animation is timed from the
           // start of the walking phase, not from when the response landed.
           if (probeRef.current) probeRef.current.bornAt = performance.now();
           setPhase("walking");
-        }, wait);
+        };
+        setTimeout(advance, wait);
       } catch (e) {
         recover(e instanceof Error && e.name === "AbortError"
           ? "Request timed out — retrying with next query"
@@ -1126,7 +1135,10 @@ export function HNSWLive() {
                 </div>
                 <VectorStrip vector={current.vector} />
                 <div className="mt-4 text-sm text-fg-secondary/70">The real vector.</div>
-                <div className="mt-5 flex items-center gap-5 rounded-lg card-glass-strong px-5 py-3">
+                <div
+                  onMouseEnter={() => setExplorerOpen(true)}
+                  className="mt-5 flex items-center gap-5 rounded-lg card-glass-strong px-5 py-3 ring-1 ring-transparent transition-all hover:ring-white/25 cursor-zoom-in"
+                >
                   <DistanceViz metric={distanceSel} />
                   <div className="text-left max-w-[30ch]">
                     <div className="text-[13px] font-medium text-fg-primary">
@@ -1141,6 +1153,22 @@ export function HNSWLive() {
                     </div>
                   </div>
                 </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* DISTANCE EXPLORER — hover-expanded live metric demonstration */}
+          <AnimatePresence>
+            {explorerOpen && phase === "encoding" && (
+              <motion.div
+                key="explorer"
+                initial={{ opacity: 0, scale: 0.97 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.98 }}
+                onMouseLeave={() => setExplorerOpen(false)}
+                className="absolute inset-0 z-30 flex items-center justify-center bg-bg-base/70 backdrop-blur-sm"
+              >
+                <DistanceExplorer initial={distanceSel} />
               </motion.div>
             )}
           </AnimatePresence>
@@ -2045,6 +2073,141 @@ function DistanceViz({ metric }: { metric: "cosine" | "dot" | "euclid" }) {
       <circle cx={B.x} cy={B.y} r="3.4" fill="#6047FF" />
       <text x={B.x + 6} y={B.y + 10} fill="#8B7CFF" fontSize="9" fontFamily="monospace">movie</text>
     </svg>
+  );
+}
+
+/**
+ * Live animated metric demonstration. The violet "movie" vector sweeps the
+ * space while the score computes in real time — for whichever metric you
+ * pick. Purely visual: a feel for the math, not the collection setting.
+ */
+function DistanceExplorer({ initial }: { initial: "cosine" | "dot" | "euclid" }) {
+  const [metric, setMetric] = useState<"cosine" | "dot" | "euclid">(initial);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [readout, setReadout] = useState({ label: "", value: 0 });
+  const metricRef = useRef(metric);
+  useEffect(() => { metricRef.current = metric; }, [metric]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = canvas.clientWidth * dpr;
+    canvas.height = canvas.clientHeight * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const W = canvas.clientWidth, H = canvas.clientHeight;
+    const O = { x: 46, y: H - 34 };
+    const LEN_A = Math.min(W, H) * 0.72;
+    const angA = (72 * Math.PI) / 180;
+    const A = { x: O.x + Math.cos(angA) * LEN_A, y: O.y - Math.sin(angA) * LEN_A };
+
+    let raf = 0;
+    let lastReadout = 0;
+    const draw = () => {
+      const now = performance.now();
+      const m = metricRef.current;
+      // B sweeps its angle; for dot it also breathes in length
+      const angB = ((28 + 26 * (1 + Math.sin(now * 0.0011))) * Math.PI) / 180;
+      const lenB = m === "dot" ? LEN_A * (0.55 + 0.3 * (1 + Math.sin(now * 0.0017)) / 2) : LEN_A * 0.8;
+      const B = { x: O.x + Math.cos(angB) * lenB, y: O.y - Math.sin(angB) * lenB };
+      const theta = angA - angB;
+      const cos = Math.cos(theta);
+      const dot = (LEN_A * lenB * cos) / (LEN_A * LEN_A);
+      const dist = Math.hypot(A.x - B.x, A.y - B.y) / LEN_A;
+
+      ctx.clearRect(0, 0, W, H);
+      // axes
+      ctx.strokeStyle = "rgba(255,255,255,0.12)";
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(O.x, O.y); ctx.lineTo(W - 16, O.y); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(O.x, O.y); ctx.lineTo(O.x, 14); ctx.stroke();
+
+      // metric-specific glyphs
+      if (m === "cosine" || m === "dot") {
+        ctx.strokeStyle = "#FF9800"; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(O.x, O.y, 44, -angA, -angB); ctx.stroke();
+        ctx.fillStyle = "#FF9800"; ctx.font = "13px monospace";
+        const mid = (angA + angB) / 2;
+        ctx.fillText("θ", O.x + Math.cos(mid) * 58, O.y - Math.sin(mid) * 58);
+      }
+      if (m === "euclid") {
+        ctx.strokeStyle = "#FF9800"; ctx.lineWidth = 2; ctx.setLineDash([6, 4]);
+        ctx.beginPath(); ctx.moveTo(A.x, A.y); ctx.lineTo(B.x, B.y); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = "#FF9800"; ctx.font = "13px monospace";
+        ctx.fillText("d", (A.x + B.x) / 2 + 8, (A.y + B.y) / 2);
+      }
+      if (m === "dot") {
+        // projection of B onto A
+        const proj = (B.x - O.x) * Math.cos(angA) + (O.y - B.y) * Math.sin(angA);
+        const P = { x: O.x + Math.cos(angA) * proj, y: O.y - Math.sin(angA) * proj };
+        ctx.strokeStyle = "rgba(255,255,255,0.4)"; ctx.lineWidth = 1; ctx.setLineDash([3, 4]);
+        ctx.beginPath(); ctx.moveTo(B.x, B.y); ctx.lineTo(P.x, P.y); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = "rgba(255,255,255,0.7)";
+        ctx.beginPath(); ctx.arc(P.x, P.y, 3, 0, Math.PI * 2); ctx.fill();
+      }
+
+      // vector A — the query
+      ctx.strokeStyle = "#DC244C"; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(O.x, O.y); ctx.lineTo(A.x, A.y); ctx.stroke();
+      ctx.fillStyle = "#DC244C";
+      ctx.beginPath(); ctx.arc(A.x, A.y, 5, 0, Math.PI * 2); ctx.fill();
+      ctx.font = "12px monospace"; ctx.fillText("query", A.x + 8, A.y);
+
+      // vector B — a movie, in motion
+      ctx.strokeStyle = "#6047FF"; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(O.x, O.y); ctx.lineTo(B.x, B.y); ctx.stroke();
+      ctx.fillStyle = "#6047FF";
+      ctx.beginPath(); ctx.arc(B.x, B.y, 5, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#8B7CFF"; ctx.fillText("movie", B.x + 8, B.y + 14);
+
+      // throttle DOM readout to ~8 fps
+      if (now - lastReadout > 120) {
+        lastReadout = now;
+        setReadout(
+          m === "cosine" ? { label: "cos θ", value: cos }
+          : m === "dot" ? { label: "A · B", value: dot }
+          : { label: "distance", value: dist },
+        );
+      }
+      raf = requestAnimationFrame(draw);
+    };
+    draw();
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
+  return (
+    <div className="w-[560px] rounded-lg card-glass-strong p-6">
+      <div className="flex items-center justify-between">
+        <div className="text-lg font-semibold tracking-tight-brand text-fg-primary">
+          How similarity is measured
+        </div>
+        <div className="flex gap-1">
+          {(["cosine", "dot", "euclid"] as const).map((mm) => (
+            <EfPill key={mm} active={metric === mm} onClick={() => setMetric(mm)}>
+              {mm === "cosine" ? "Cosine" : mm === "dot" ? "Dot" : "Euclid"}
+            </EfPill>
+          ))}
+        </div>
+      </div>
+      <canvas ref={canvasRef} className="mt-3 w-full" style={{ height: 230 }} />
+      <div className="mt-2 flex items-end justify-between">
+        <div>
+          <span className="font-mono text-3xl font-semibold text-qdrant-red">
+            {readout.label} = {readout.value.toFixed(2)}
+          </span>
+          <div className="mt-1 text-[12px] text-fg-secondary">
+            {metric === "cosine" && "Closer to 1 means the vectors point the same way."}
+            {metric === "dot" && "Angle and length together. Watch the projection dot slide."}
+            {metric === "euclid" && "Smaller distance means more similar. Watch d shrink and grow."}
+          </div>
+        </div>
+        <div className="text-[11px] text-fg-secondary/60">move the mouse away to close</div>
+      </div>
+    </div>
   );
 }
 
