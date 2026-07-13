@@ -1166,14 +1166,16 @@ export function HNSWLive() {
                 initial={{ opacity: 0, y: -8 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -6 }}
-                className="absolute top-20 left-1/2 -translate-x-1/2 z-10 max-w-[70%] rounded-md card-glass-strong px-6 py-2.5 text-center"
+                className="absolute top-[72px] left-0 right-0 z-10 flex flex-col items-center pointer-events-none"
               >
-                <span className="text-[11px] text-fg-secondary mr-2">
-                  {customSource === "phone" ? "Someone asked" : "You asked"}
-                </span>
-                <span className="text-[15px] font-medium tracking-tight-brand text-fg-primary">
-                  &ldquo;{latest.text}&rdquo;
-                </span>
+                <div className="max-w-[80%] rounded-md card-glass-strong px-8 py-3.5 text-center">
+                  <div className="text-[12px] text-fg-secondary mb-0.5">
+                    {customSource === "phone" ? "Someone asked" : "You asked"}
+                  </div>
+                  <div className="text-2xl font-semibold tracking-tight-brand text-fg-primary leading-snug">
+                    &ldquo;{latest.text}&rdquo;
+                  </div>
+                </div>
               </motion.div>
             )}
           </AnimatePresence>
