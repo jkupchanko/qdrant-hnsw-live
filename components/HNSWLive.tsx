@@ -85,6 +85,9 @@ export function HNSWLive() {
   const [error, setError] = useState<string | null>(null);
 
   const [phase, setPhase] = useState<Phase>("typing");
+  // The loop stays parked until someone confirms the setup once. After that
+  // first start it runs forever, settings card or not.
+  const [started, setStarted] = useState(false);
   const [qIdx, setQIdx] = useState(0);
   const [typed, setTyped] = useState("");
   const [cycle, setCycle] = useState(0);
@@ -278,9 +281,6 @@ export function HNSWLive() {
   const [exactMode, setExactMode] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
   const [consoleOpen, setConsoleOpen] = useState(true);
-  // The loop stays parked until someone confirms the setup once. After that
-  // first start it runs forever, settings card or not.
-  const [started, setStarted] = useState(false);
   const [compareKeyword, setCompareKeyword] = useState(false);
   const [rerankMode, setRerankMode] = useState(false);
   const [hybridMode, setHybridMode] = useState(false);
