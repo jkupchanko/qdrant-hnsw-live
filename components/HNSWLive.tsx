@@ -164,6 +164,53 @@ export function HNSWLive() {
 
   // Poll the Qdrant-backed queue for queries sent from phones (/remote).
   const pendingRemoteRef = useRef<{ id: number; text: string; since: number } | null>(null);
+  const consumingRef = useRef(false);
+
+  /** Consume + start the next phone query. Returns true if one started. */
+  const consumeQueue = async (): Promise<boolean> => {
+    if (consumingRef.current) return false;
+    consumingRef.current = true;
+    try {
+      const r = await fetch("/api/remote", { cache: "no-store" });
+      if (!r.ok) return false;
+      const d = (await r.json()) as {
+        id?: number | null;
+        text?: string | null;
+        waiting?: number;
+        options?: { ef?: number | null; topK?: number; genre?: string | null; rerank?: boolean; hybrid?: boolean };
+      };
+      if (!d.text || d.id == null) {
+        setRemoteWaiting(0);
+        return false;
+      }
+      setRemoteWaiting(d.waiting ?? 0);
+      const o = d.options ?? {};
+      if (o.ef !== undefined) setEfOverride(o.ef ?? null);
+      if (o.topK) setTopK(o.topK);
+      if (o.genre !== undefined) setGenreFilter(o.genre ?? null);
+      if (o.rerank !== undefined) setRerankMode(!!o.rerank);
+      if (o.hybrid !== undefined) setHybridMode(!!o.hybrid);
+      pendingRemoteRef.current = { id: d.id, text: d.text, since: Date.now() };
+      const ok = await runCustomText(d.text, "phone");
+      if (!ok) {
+        pendingRemoteRef.current = null;
+        fetch("/api/remote/result", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ id: d.id, summary: { error: "The screen could not run your search. Please try again." } }),
+        }).catch(() => {});
+        return false;
+      }
+      return true;
+    } catch {
+      return false;
+    } finally {
+      consumingRef.current = false;
+    }
+  };
+  const consumeQueueRef = useRef(consumeQueue);
+  useEffect(() => { consumeQueueRef.current = consumeQueue; });
+
   useEffect(() => {
     const t = setInterval(async () => {
       // One at a time, and never consume the next before the previous
@@ -173,43 +220,10 @@ export function HNSWLive() {
       const pending = pendingRemoteRef.current;
       if (pending && Date.now() - pending.since > 90_000) {
         pendingRemoteRef.current = null;
-      } else if (customQ || embedState === "loading" || pending) {
+      } else if (customQ || embedState === "loading" || pending || consumingRef.current) {
         return;
       }
-      try {
-        const r = await fetch("/api/remote", { cache: "no-store" });
-        if (!r.ok) return;
-        const d = (await r.json()) as {
-          id?: number | null;
-          text?: string | null;
-          waiting?: number;
-          options?: { ef?: number | null; topK?: number; genre?: string | null; rerank?: boolean; hybrid?: boolean };
-        };
-        if (!d.text || d.id == null) {
-          setRemoteWaiting(0);
-          return;
-        }
-        setRemoteWaiting(d.waiting ?? 0);
-        // Apply the visitor's chosen options — the booth mirrors their setup.
-        const o = d.options ?? {};
-        if (o.ef !== undefined) setEfOverride(o.ef ?? null);
-        if (o.topK) setTopK(o.topK);
-        if (o.genre !== undefined) setGenreFilter(o.genre ?? null);
-        if (o.rerank !== undefined) setRerankMode(!!o.rerank);
-        if (o.hybrid !== undefined) setHybridMode(!!o.hybrid);
-        pendingRemoteRef.current = { id: d.id, text: d.text, since: Date.now() };
-        const ok = await runCustomText(d.text, "phone");
-        if (!ok) {
-          // The query was already consumed from the queue — tell the phone
-          // instead of leaving it hanging, and release the lock.
-          pendingRemoteRef.current = null;
-          fetch("/api/remote/result", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ id: d.id, summary: { error: "The screen could not run your search. Please try again." } }),
-          }).catch(() => {});
-        }
-      } catch { /* queue quiet */ }
+      await consumeQueueRef.current();
     }, 2500);
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -651,18 +665,23 @@ export function HNSWLive() {
 
   useEffect(() => {
     if (phase !== "clearing") return;
-    const t = setTimeout(() => {
+    const t = setTimeout(async () => {
       probeRef.current = null;
       setTyped("");
+      setCycle((c) => c + 1);
       if (customQ) {
-        setCustomQ(null); // the visitor's query ran once, resume the bank
+        setCustomQ(null);
         setCustomSource(null);
         pendingRemoteRef.current = null; // never let a failed run jam the queue
+        // Drain the phone queue completely before returning to the auto-loop:
+        // if another phone is waiting, chain straight into its search.
+        const chained = await consumeQueueRef.current();
+        if (chained) return; // runCustomText already restarted the cycle
+        setPhase("typing"); // queue empty — the bank resumes
       } else {
         setQIdx((n) => (n + 1) % Math.max(queries.length, 1));
+        setPhase("typing");
       }
-      setCycle((c) => c + 1);
-      setPhase("typing");
     }, CLEAR_MS);
     return () => clearTimeout(t);
   }, [phase, queries.length, customQ]);
