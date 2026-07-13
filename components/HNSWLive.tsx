@@ -1158,6 +1158,26 @@ export function HNSWLive() {
             )}
           </AnimatePresence>
 
+          {/* ANSWER ECHO — the question stays visible under the step rail */}
+          <AnimatePresence>
+            {showResults && latest && (
+              <motion.div
+                key="ask-echo"
+                initial={{ opacity: 0, y: -8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -6 }}
+                className="absolute top-20 left-1/2 -translate-x-1/2 z-10 max-w-[70%] rounded-md card-glass-strong px-6 py-2.5 text-center"
+              >
+                <span className="text-[11px] text-fg-secondary mr-2">
+                  {customSource === "phone" ? "Someone asked" : "You asked"}
+                </span>
+                <span className="text-[15px] font-medium tracking-tight-brand text-fg-primary">
+                  &ldquo;{latest.text}&rdquo;
+                </span>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
           {/* ANSWER — results + one huge number */}
           <AnimatePresence>
             {showResults && latest && (
