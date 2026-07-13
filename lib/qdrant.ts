@@ -189,6 +189,51 @@ export async function getVariantsInfo(): Promise<VariantInfo[]> {
   return out.sort((a, b) => a.key.localeCompare(b.key));
 }
 
+/* ── Remote-query queue: Qdrant as a tiny message bus ─────────────
+   Phones write query text into a 1-dim dummy collection; the booth
+   screen polls and consumes. No extra infrastructure needed. */
+
+const REMOTE = "remote_queries";
+
+async function ensureRemoteCollection(): Promise<void> {
+  const { url, apiKey } = requireEnv();
+  const r = await fetch(`${url}/collections/${REMOTE}`, { headers: { "api-key": apiKey } });
+  if (r.ok) return;
+  await fetch(`${url}/collections/${REMOTE}`, {
+    method: "PUT",
+    headers: { "api-key": apiKey, "content-type": "application/json" },
+    body: JSON.stringify({ vectors: { size: 1, distance: "Dot" } }),
+  });
+}
+
+export async function pushRemoteQuery(text: string): Promise<void> {
+  await ensureRemoteCollection();
+  await qdrant(`/collections/${REMOTE}/points?wait=true`, {
+    points: [{
+      id: Math.floor(Date.now() % 2147483647),
+      vector: [0],
+      payload: { text: text.slice(0, 200), ts: Date.now() },
+    }],
+  });
+}
+
+export async function popRemoteQuery(): Promise<string | null> {
+  try {
+    const res = await qdrant<RestResponse<{ points: Array<{ id: number; payload?: { text?: string } }> }>>(
+      `/collections/${REMOTE}/points/scroll`,
+      { limit: 5, with_payload: true },
+    );
+    const points = res.result.points;
+    if (!points.length) return null;
+    await qdrant(`/collections/${REMOTE}/points/delete?wait=true`, {
+      points: points.map((p) => p.id),
+    });
+    return points[0].payload?.text ?? null;
+  } catch {
+    return null; // collection may not exist yet — nothing queued
+  }
+}
+
 /** GET /collections/{name} — status, counts, HNSW config, payload schema. */
 export async function getCollectionInfo(): Promise<CollectionInfo> {
   const { url, apiKey } = requireEnv();

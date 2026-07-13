@@ -4,7 +4,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { loadMovies, loadQueries } from "@/lib/data";
 import { GENRE_COLOR, GENRE_ORDER, colorFor } from "@/lib/genres";
-import type { Movie, Query, SearchHit } from "@/lib/types";
+import type { Movie, MoviePayload, Query, SearchHit } from "@/lib/types";
 import { QdrantLogo } from "./QdrantLogo";
 import QRCode from "qrcode";
 import { embedText, rerankPairs } from "@/lib/embed";
@@ -129,23 +129,43 @@ export function HNSWLive() {
   const [searchInput, setSearchInput] = useState("");
   const [embedState, setEmbedState] = useState<"idle" | "loading" | "error">("idle");
 
-  const submitCustom = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const text = searchInput.trim();
+  const runCustomText = async (text: string, source: "screen" | "phone") => {
     if (!text || embedState === "loading") return;
     setEmbedState("loading");
     try {
       const vector = await embedText(text);
       setEmbedState("idle");
       probeRef.current = null;
+      setCustomSource(source);
       setCustomQ({ text, vector });
-      setSearchInput("");
       setTyped("");
       setPhase("typing");
     } catch {
       setEmbedState("error");
     }
   };
+
+  const submitCustom = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const text = searchInput.trim();
+    setSearchInput("");
+    await runCustomText(text, "screen");
+  };
+
+  // Poll the Qdrant-backed queue for queries sent from phones (/remote).
+  useEffect(() => {
+    const t = setInterval(async () => {
+      if (customQ || embedState === "loading") return; // one at a time
+      try {
+        const r = await fetch("/api/remote", { cache: "no-store" });
+        if (!r.ok) return;
+        const d = (await r.json()) as { text?: string | null };
+        if (d.text) runCustomText(d.text, "phone");
+      } catch { /* queue quiet */ }
+    }, 2500);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [customQ, embedState]);
   const [latest, setLatest] = useState<{
     text: string;
     hits: SearchHit[];
@@ -166,6 +186,13 @@ export function HNSWLive() {
     origRanks: number[];
     /** The top-K in pure vector-search order, before the cross-encoder. */
     origHits: SearchHit[];
+    /** Present when hybrid mode ran: the three-way comparison. */
+    hybrid: {
+      kw: Array<{ id: number; payload: MoviePayload; matches: number }>;
+      kwTotal: number;
+      sem: SearchHit[];
+      hyb: Array<SearchHit & { kwRank: number | null; semRank: number | null }>;
+    } | null;
   } | null>(null);
 
   // Manual override wins; otherwise ef auto-cycles so the booth varies itself.
@@ -180,6 +207,8 @@ export function HNSWLive() {
   const [consoleOpen, setConsoleOpen] = useState(true);
   const [compareKeyword, setCompareKeyword] = useState(false);
   const [rerankMode, setRerankMode] = useState(false);
+  const [hybridMode, setHybridMode] = useState(false);
+  const [customSource, setCustomSource] = useState<"screen" | "phone" | null>(null);
 
   // Index variants — separate collections, same data. Distance and m are
   // build-time, so picking one routes to the matching collection.
@@ -211,17 +240,17 @@ export function HNSWLive() {
     setPace(1);
     setTenant(null);
     setRerankMode(false);
+    setHybridMode(false);
   };
 
   const latencyHistoryRef = useRef<number[]>([]);
   const modeStatsRef = useRef<Record<string, number[]>>({});
   const [qrUrl, setQrUrl] = useState<string | null>(null);
+  const [remoteQrUrl, setRemoteQrUrl] = useState<string | null>(null);
   useEffect(() => {
-    QRCode.toDataURL(REPO_URL, {
-      margin: 1,
-      width: 220,
-      color: { dark: "#F0F3FA", light: "#00000000" },
-    }).then(setQrUrl).catch(() => {});
+    const opts = { margin: 1, width: 220, color: { dark: "#F0F3FA", light: "#00000000" } };
+    QRCode.toDataURL(REPO_URL, opts).then(setQrUrl).catch(() => {});
+    QRCode.toDataURL(`${window.location.origin}/remote`, opts).then(setRemoteQrUrl).catch(() => {});
   }, []);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const staticLayerRef = useRef<HTMLCanvasElement | null>(null); // 100K points pre-rendered once
@@ -320,6 +349,58 @@ export function HNSWLive() {
     };
     (async () => {
       try {
+        // Hybrid mode: dense + lexical + RRF fusion via /api/hybrid.
+        if (hybridMode) {
+          const r = await fetch("/api/hybrid", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ vector: current.vector, text: current.text, limit: 6 }),
+          });
+          const took = performance.now() - started;
+          const d = await r.json();
+          if (cancelled) return;
+          if (!r.ok || !d?.hybrid?.length) {
+            recover(d?.error || `HTTP ${r.status} — retrying with next query`);
+            return;
+          }
+          setError(null);
+          const hyb = d.hybrid as Array<SearchHit & { kwRank: number | null; semRank: number | null }>;
+          latencyHistoryRef.current = [...latencyHistoryRef.current.slice(-(LAT_HISTORY - 1)), took];
+          setTotalOps((n) => n + 1);
+          (modeStatsRef.current["Hybrid RRF"] ??= []).push(took);
+          setLog((prev) => [{
+            id: `${started}`, text: current.text, latencyMs: Math.round(took), ef: currentEf,
+            topTitle: hyb[0].payload.title, topHue: hyb[0].payload.hue ?? 220,
+          }, ...prev].slice(0, LOG_CAPACITY));
+          const origin = pointByIdRef.current.get(hyb[0].id);
+          if (origin) {
+            probeRef.current = {
+              x: origin.tx, y: origin.ty, originId: hyb[0].id,
+              matchIds: hyb.map((h) => h.id),
+              color: GENRE_COLOR[hyb[0].payload.genres[0]] ?? "#DC244C",
+              path: simulatePath(origin, currentEf, pointsRef.current),
+              bornAt: performance.now(),
+            };
+          }
+          setLatest({
+            text: current.text, hits: hyb,
+            clientMs: Math.round(took), serverMs: d.serverTimeMs ?? 0,
+            ef: currentEf, nodesVisited: Math.round(currentEf * 2),
+            exact: false, genre: null, limit: 6,
+            keywordCount: null, keywordTitles: [], euclid: false,
+            reranked: false, rerankMs: 0, fetched: hyb.length,
+            origRanks: hyb.map((_, i) => i), origHits: hyb,
+            hybrid: { kw: d.kw, kwTotal: d.kwTotal, sem: d.sem, hyb },
+          });
+          const waitH = Math.max(0, MIN_ENCODE_MS - (performance.now() - started));
+          setTimeout(() => {
+            if (cancelled) return;
+            if (probeRef.current) probeRef.current.bornAt = performance.now();
+            setPhase("walking");
+          }, waitH);
+          return;
+        }
+
         // Keyword comparison runs in parallel — same query, same cluster.
         const kwPromise = compareKeyword
           ? fetch("/api/keyword", {
@@ -415,6 +496,7 @@ export function HNSWLive() {
           fetched,
           origRanks,
           origHits,
+          hybrid: null,
         });
         latencyHistoryRef.current = [...latencyHistoryRef.current.slice(-(LAT_HISTORY - 1)), took];
         setTotalOps((n) => n + 1);
@@ -484,6 +566,7 @@ export function HNSWLive() {
       setTyped("");
       if (customQ) {
         setCustomQ(null); // the visitor's query ran once, resume the bank
+        setCustomSource(null);
       } else {
         setQIdx((n) => (n + 1) % Math.max(queries.length, 1));
       }
@@ -695,6 +778,18 @@ export function HNSWLive() {
             </button>
           </form>
 
+          {/* PHONE QR — search the big screen from your own device */}
+          {remoteQrUrl && !consoleOpen && (
+            <div className="absolute bottom-5 right-5 z-10 flex items-center gap-3 rounded-lg card-glass-strong px-3 py-2.5">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={remoteQrUrl} alt="Scan to search from your phone" className="h-16 w-16" />
+              <div className="text-left leading-snug">
+                <div className="text-[11px] font-medium text-fg-primary">Search from<br />your phone</div>
+                <div className="mt-0.5 text-[9px] text-fg-secondary">scan, type, watch</div>
+              </div>
+            </div>
+          )}
+
           {/* SETTINGS PILL — reopens the centered setup card */}
           {!consoleOpen && (
             <button
@@ -727,6 +822,10 @@ export function HNSWLive() {
                     <SetupRow label="Re-rank (cross-encoder)">
                       <EfPill active={!rerankMode} onClick={() => setRerankMode(false)}>Off</EfPill>
                       <EfPill active={rerankMode} onClick={() => setRerankMode(true)}>On</EfPill>
+                    </SetupRow>
+                    <SetupRow label="Hybrid (dense + keyword, RRF)">
+                      <EfPill active={!hybridMode} onClick={() => setHybridMode(false)}>Off</EfPill>
+                      <EfPill active={hybridMode} onClick={() => setHybridMode(true)}>On</EfPill>
                     </SetupRow>
                     <SetupRow label="Keyword compare">
                       <EfPill active={!compareKeyword} onClick={() => setCompareKeyword(false)}>Off</EfPill>
@@ -872,7 +971,9 @@ export function HNSWLive() {
                 transition={{ duration: 0.4 }}
                 className="absolute inset-0 flex flex-col items-center justify-center bg-bg-base/60 backdrop-blur-[2px] px-16 text-center"
               >
-                <div className="eyebrow mb-6">Ask {movies.length.toLocaleString()} movies</div>
+                <div className="eyebrow mb-6">
+                  {customSource === "phone" ? "From someone's phone" : `Ask ${movies.length.toLocaleString()} movies`}
+                </div>
                 <div
                   className="font-semibold tracking-tight-brand text-fg-primary max-w-[24ch]"
                   style={{ fontSize: "clamp(2.4rem, 4.6vw, 4.2rem)", lineHeight: 1.12 }}
@@ -990,6 +1091,11 @@ export function HNSWLive() {
                     {((latest.nodesVisited / Math.max(movies.length, 1)) * 100).toFixed(1)}% of the data touched
                   </div>
                 </div>
+                {/* HYBRID — three-way retrieval comparison */}
+                {latest.hybrid ? (
+                  <HybridCompare data={latest.hybrid} onOpen={openDetail} />
+                ) : (
+                <>
                 {/* BEFORE strip — pure vector-search order, for comparison */}
                 {latest.reranked && (
                   <div className="mb-2">
@@ -1045,6 +1151,8 @@ export function HNSWLive() {
                     />
                   ))}
                 </div>
+                </>
+                )}
               </motion.div>
             )}
           </AnimatePresence>
@@ -1355,6 +1463,84 @@ function KioskGuard() {
     >
       Fullscreen
     </button>
+  );
+}
+
+/**
+ * Three-way retrieval comparison: keyword rank, semantic rank, and the
+ * RRF fusion of both. The full taxonomy on one screen.
+ */
+function HybridCompare({
+  data,
+  onOpen,
+}: {
+  data: {
+    kw: Array<{ id: number; payload: MoviePayload; matches: number }>;
+    kwTotal: number;
+    sem: SearchHit[];
+    hyb: Array<SearchHit & { kwRank: number | null; semRank: number | null }>;
+  };
+  onOpen: (hit: SearchHit) => void;
+}) {
+  const Row = ({ payload, right, onClick }: { payload: MoviePayload; right: string; onClick?: () => void }) => (
+    <button
+      onClick={onClick}
+      disabled={!onClick}
+      className="flex w-full items-center gap-2 rounded bg-white/[0.04] ring-1 ring-white/[0.06] px-2 py-1.5 text-left hover:ring-white/30 transition-all disabled:hover:ring-white/[0.06]"
+    >
+      <span
+        aria-hidden
+        className="h-8 w-6 shrink-0 rounded-sm bg-cover bg-center"
+        style={{
+          background: payload.poster
+            ? `url(${payload.poster}) center/cover`
+            : `linear-gradient(140deg, hsl(${payload.hue ?? 220},58%,32%), hsl(${((payload.hue ?? 220) + 30) % 360},48%,14%))`,
+        }}
+      />
+      <span className="min-w-0 flex-1 truncate text-[11.5px] text-fg-primary/90">{payload.title}</span>
+      <span className="shrink-0 text-[10px] text-fg-secondary">{right}</span>
+    </button>
+  );
+
+  return (
+    <div className="grid grid-cols-3 gap-3">
+      <div>
+        <div className="mb-1.5 text-[10px] tracking-wide text-fg-secondary/70">
+          Keyword · {data.kwTotal === 0 ? "no exact matches" : `${data.kwTotal} matched`}
+        </div>
+        <div className="space-y-1">
+          {data.kw.length === 0 && (
+            <div className="rounded bg-white/[0.03] ring-1 ring-white/[0.05] px-2 py-3 text-center text-[11px] text-fg-secondary">
+              those words never appear
+            </div>
+          )}
+          {data.kw.map((k) => (
+            <Row key={`k-${k.id}`} payload={k.payload} right={`${k.matches} words`} />
+          ))}
+        </div>
+      </div>
+      <div>
+        <div className="mb-1.5 text-[10px] tracking-wide text-fg-secondary/70">Semantic · dense vectors</div>
+        <div className="space-y-1">
+          {data.sem.map((s) => (
+            <Row key={`s-${s.id}`} payload={s.payload} right={`${Math.round(s.score * 100)}%`} onClick={() => onOpen(s)} />
+          ))}
+        </div>
+      </div>
+      <div>
+        <div className="mb-1.5 text-[10px] tracking-wide text-qdrant-red">Hybrid · RRF fusion</div>
+        <div className="space-y-1">
+          {data.hyb.map((h) => (
+            <Row
+              key={`h-${h.id}`}
+              payload={h.payload}
+              right={h.kwRank && h.semRank ? "both" : h.kwRank ? "kw only" : "sem only"}
+              onClick={() => onOpen(h)}
+            />
+          ))}
+        </div>
+      </div>
+    </div>
   );
 }
 
