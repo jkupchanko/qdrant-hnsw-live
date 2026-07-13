@@ -66,41 +66,23 @@ export default function RemotePage() {
       });
       const d = (await r.json()) as { ok?: boolean; id?: number; position?: number };
       if (!r.ok || !d.id) throw new Error();
-      const pos = d.position ?? 1;
-      setPosition(pos);
+      setPosition(d.position ?? 1);
 
-      // Each search ahead of us owns the screen for a full cycle
-      // (type + embed + walk + answer + the long hold at the end).
-      const PER_RUN_MS = 32000;
-      const queueDelay = (pos - 1) * PER_RUN_MS;
+      // Cycle the progress stages gently and forever — booth run length is
+      // unpredictable (holds on hover, re-rank, a queue ahead), so we do NOT
+      // guess timing. We simply wait for the real result to arrive.
+      stageRef.current = setInterval(
+        () => setStage((s) => (s + 1) % STAGES.length),
+        3600,
+      );
 
-      // Staged progress starts only when it's (roughly) our turn.
-      const startStages = () => {
-        stageRef.current = setInterval(() => setStage((s) => Math.min(s + 1, STAGES.length - 1)), 3200);
-      };
-      if (queueDelay > 0) {
-        stageRef.current = setTimeout(startStages, queueDelay) as unknown as ReturnType<typeof setInterval>;
-      } else {
-        startStages();
-      }
-
-      // Poll for the booth's summary. Budget for the whole line ahead PLUS
-      // one invisible in-flight run (a consumed search no longer counts in
-      // the queue, so "position 1" can still mean "after the current one").
+      // Poll for the booth's summary until it lands. Only after a very long
+      // wait (5 min — far beyond any real queue) do we offer a gentle retry,
+      // and even then we keep listening in case it shows up.
       const started = Date.now();
-      const deadline = 60000 + PER_RUN_MS + queueDelay;
-      const hardStop = deadline + 45000;
       pollRef.current = setInterval(async () => {
-        const elapsed = Date.now() - started;
-        if (elapsed > hardStop) {
-          stopTimers();
+        if (Date.now() - started > 300000) {
           setPhase((p) => (p === "done" ? p : "timeout"));
-          return;
-        }
-        if (elapsed > deadline) {
-          // Show "busy" but keep listening — if the summary lands late,
-          // upgrade to it instead of stranding the visitor.
-          setPhase((p) => (p === "waiting" ? "timeout" : p));
         }
         try {
           const rr = await fetch(`/api/remote/result?id=${d.id}`, { cache: "no-store" });
@@ -233,22 +215,19 @@ export default function RemotePage() {
             Watch the big screen.
           </h1>
           <p className="mt-1 mb-4 text-center text-sm text-fg-secondary">&ldquo;{text.trim()}&rdquo;</p>
-          {position > 1 && stage === 0 && (
+          {position > 1 && (
             <div className="mb-4 rounded-lg bg-qdrant-red/10 ring-1 ring-qdrant-red/30 px-3 py-2 text-center text-[13px] text-qdrant-red">
-              You&rsquo;re #{position} in line. Your turn in about {Math.max(1, Math.round(((position - 1) * 32) / 60 * 10) / 10)} min — keep watching the screen.
+              You&rsquo;re #{position} in line. Searches run one at a time — keep an eye on the screen.
             </div>
           )}
           <div className="space-y-2.5">
             {STAGES.map((s, i) => (
               <div key={s} className={`flex items-center gap-3 rounded-lg px-3 py-2.5 ring-1 transition-all ${
-                i < stage ? "bg-white/[0.03] ring-white/[0.06] opacity-60"
-                : i === stage ? "bg-qdrant-red/10 ring-qdrant-red/30"
-                : "bg-white/[0.02] ring-white/[0.04] opacity-40"
+                i === stage ? "bg-qdrant-red/10 ring-qdrant-red/30"
+                : "bg-white/[0.02] ring-white/[0.05] opacity-45"
               }`}>
                 <span className="flex h-5 w-5 items-center justify-center">
-                  {i < stage ? (
-                    <span className="text-[13px]" style={{ color: "#4CAF50" }}>✓</span>
-                  ) : i === stage ? (
+                  {i === stage ? (
                     <span className="h-2.5 w-2.5 rounded-full bg-qdrant-red animate-pulse" />
                   ) : (
                     <span className="h-1.5 w-1.5 rounded-full bg-white/20" />
