@@ -14,8 +14,8 @@ export async function POST(req: Request) {
   const text = body.text?.trim();
   if (!text) return NextResponse.json({ error: "Empty query" }, { status: 400 });
   try {
-    const id = await pushRemoteQuery(text, body.options);
-    return NextResponse.json({ ok: true, id });
+    const { id, position } = await pushRemoteQuery(text, body.options);
+    return NextResponse.json({ ok: true, id, position });
   } catch (err) {
     console.error("[/api/remote] push error:", err);
     return NextResponse.json({ error: "queue unavailable" }, { status: 500 });

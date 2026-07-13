@@ -215,8 +215,17 @@ async function ensureTinyCollection(name: string): Promise<void> {
   });
 }
 
-export async function pushRemoteQuery(text: string, options?: RemoteOptions): Promise<number> {
+export async function pushRemoteQuery(text: string, options?: RemoteOptions): Promise<{ id: number; position: number }> {
   await ensureTinyCollection(REMOTE);
+  // Queue position: how many are already waiting ahead of this one.
+  let position = 1;
+  try {
+    const res = await qdrant<RestResponse<{ points: Array<{ id: number }> }>>(
+      `/collections/${REMOTE}/points/scroll`,
+      { limit: 50, with_payload: false },
+    );
+    position = res.result.points.length + 1;
+  } catch { /* fresh collection */ }
   const id = Math.floor(Date.now() % 2147483647);
   await qdrant(`/collections/${REMOTE}/points?wait=true`, {
     points: [{
@@ -225,23 +234,27 @@ export async function pushRemoteQuery(text: string, options?: RemoteOptions): Pr
       payload: { text: text.slice(0, 200), options: options ?? {}, ts: Date.now() },
     }],
   }, "PUT");
-  return id;
+  return { id, position };
 }
 
-export async function popRemoteQuery(): Promise<{ id: number; text: string; options: RemoteOptions } | null> {
+export async function popRemoteQuery(): Promise<{ id: number; text: string; options: RemoteOptions; waiting: number } | null> {
   try {
-    const res = await qdrant<RestResponse<{ points: Array<{ id: number; payload?: { text?: string; options?: RemoteOptions } }> }>>(
+    const res = await qdrant<RestResponse<{ points: Array<{ id: number; payload?: { text?: string; options?: RemoteOptions; ts?: number } }> }>>(
       `/collections/${REMOTE}/points/scroll`,
-      { limit: 5, with_payload: true },
+      { limit: 50, with_payload: true },
     );
-    const points = res.result.points;
+    const points = res.result.points.filter((p) => p.payload?.text);
     if (!points.length) return null;
-    await qdrant(`/collections/${REMOTE}/points/delete?wait=true`, {
-      points: points.map((p) => p.id),
-    });
+    // Strict FIFO: oldest first. Consume ONLY that one — the rest stay queued.
+    points.sort((a, b) => (a.payload?.ts ?? a.id) - (b.payload?.ts ?? b.id));
     const first = points[0];
-    if (!first.payload?.text) return null;
-    return { id: first.id, text: first.payload.text, options: first.payload.options ?? {} };
+    await qdrant(`/collections/${REMOTE}/points/delete?wait=true`, { points: [first.id] });
+    return {
+      id: first.id,
+      text: first.payload!.text!,
+      options: first.payload!.options ?? {},
+      waiting: points.length - 1,
+    };
   } catch {
     return null; // collection may not exist yet — nothing queued
   }

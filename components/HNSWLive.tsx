@@ -165,7 +165,11 @@ export function HNSWLive() {
           text?: string | null;
           options?: { ef?: number | null; topK?: number; genre?: string | null; rerank?: boolean; hybrid?: boolean };
         };
-        if (!d.text || d.id == null) return;
+        if (!d.text || d.id == null) {
+          setRemoteWaiting(0);
+          return;
+        }
+        setRemoteWaiting((d as { waiting?: number }).waiting ?? 0);
         // Apply the visitor's chosen options — the booth mirrors their setup.
         const o = d.options ?? {};
         if (o.ef !== undefined) setEfOverride(o.ef ?? null);
@@ -294,10 +298,15 @@ export function HNSWLive() {
   const modeStatsRef = useRef<Record<string, number[]>>({});
   const [qrUrl, setQrUrl] = useState<string | null>(null);
   const [remoteQrUrl, setRemoteQrUrl] = useState<string | null>(null);
+  const [remoteQrBig, setRemoteQrBig] = useState<string | null>(null);
+  const [qrExpanded, setQrExpanded] = useState(false);
+  const [remoteWaiting, setRemoteWaiting] = useState(0);
   useEffect(() => {
     const opts = { margin: 1, width: 220, color: { dark: "#F0F3FA", light: "#00000000" } };
     QRCode.toDataURL(REPO_URL, opts).then(setQrUrl).catch(() => {});
-    QRCode.toDataURL(`${window.location.origin}/remote`, opts).then(setRemoteQrUrl).catch(() => {});
+    const remoteTarget = `${window.location.origin}/remote`;
+    QRCode.toDataURL(remoteTarget, opts).then(setRemoteQrUrl).catch(() => {});
+    QRCode.toDataURL(remoteTarget, { ...opts, width: 560 }).then(setRemoteQrBig).catch(() => {});
   }, []);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const staticLayerRef = useRef<HTMLCanvasElement | null>(null); // 100K points pre-rendered once
@@ -825,17 +834,55 @@ export function HNSWLive() {
             </button>
           </form>
 
-          {/* PHONE QR — search the big screen from your own device */}
+          {/* PHONE QR — click to blow it up for people walking by */}
           {remoteQrUrl && !consoleOpen && (
-            <div className="absolute bottom-5 right-5 z-10 flex items-center gap-3 rounded-lg card-glass-strong px-3 py-2.5">
+            <button
+              onClick={() => setQrExpanded(true)}
+              className="absolute bottom-5 right-5 z-10 flex items-center gap-3 rounded-lg card-glass-strong px-3 py-2.5 text-left transition-all hover:ring-1 hover:ring-white/20"
+            >
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={remoteQrUrl} alt="Scan to search from your phone" className="h-16 w-16" />
-              <div className="text-left leading-snug">
+              <div className="leading-snug">
                 <div className="text-[11px] font-medium text-fg-primary">Search from<br />your phone</div>
-                <div className="mt-0.5 text-[9px] text-fg-secondary">scan, type, watch</div>
+                <div className="mt-0.5 text-[9px] text-fg-secondary">
+                  {remoteWaiting > 0 ? `${remoteWaiting} in queue` : "tap to enlarge"}
+                </div>
               </div>
-            </div>
+            </button>
           )}
+
+          {/* BIG QR — full-stage takeover for scanning from a distance */}
+          <AnimatePresence>
+            {qrExpanded && remoteQrBig && (
+              <motion.button
+                key="bigqr"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setQrExpanded(false)}
+                className="absolute inset-0 z-40 flex flex-col items-center justify-center bg-bg-base/85 backdrop-blur-md"
+              >
+                <div className="text-3xl font-semibold tracking-tight-brand text-fg-primary">
+                  Search from your phone.
+                </div>
+                <div className="mt-1.5 mb-8 text-sm text-fg-secondary">
+                  Scan, type anything, watch this screen answer.
+                </div>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={remoteQrBig}
+                  alt="Scan to search from your phone"
+                  className="h-[340px] w-[340px] rounded-lg bg-white/[0.03] ring-1 ring-white/[0.08] p-4"
+                />
+                {remoteWaiting > 0 && (
+                  <div className="mt-5 rounded bg-qdrant-red/15 ring-1 ring-qdrant-red/30 px-3 py-1 text-[12px] text-qdrant-red">
+                    {remoteWaiting} search{remoteWaiting === 1 ? "" : "es"} in queue, running in order
+                  </div>
+                )}
+                <div className="mt-6 text-[11px] text-fg-secondary/60">tap anywhere to close</div>
+              </motion.button>
+            )}
+          </AnimatePresence>
 
           {/* SETTINGS PILL — reopens the centered setup card */}
           {!consoleOpen && (

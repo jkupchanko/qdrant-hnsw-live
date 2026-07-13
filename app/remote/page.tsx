@@ -33,6 +33,7 @@ export default function RemotePage() {
   const [stage, setStage] = useState(0);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [showOptions, setShowOptions] = useState(false);
+  const [position, setPosition] = useState(1);
 
   // Options — defaults mirror the booth's defaults
   const [ef, setEf] = useState<number | null>(null);
@@ -62,8 +63,9 @@ export default function RemotePage() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ text: t, options: { ef, topK, genre, rerank, hybrid } }),
       });
-      const d = (await r.json()) as { ok?: boolean; id?: number };
+      const d = (await r.json()) as { ok?: boolean; id?: number; position?: number };
       if (!r.ok || !d.id) throw new Error();
+      setPosition(d.position ?? 1);
 
       // Staged progress while we wait for the real summary
       stageRef.current = setInterval(() => setStage((s) => Math.min(s + 1, STAGES.length - 1)), 3200);
@@ -206,7 +208,12 @@ export default function RemotePage() {
           <h1 className="text-xl font-semibold tracking-tight-brand text-fg-primary text-center">
             Watch the big screen.
           </h1>
-          <p className="mt-1 mb-6 text-center text-sm text-fg-secondary">&ldquo;{text.trim()}&rdquo;</p>
+          <p className="mt-1 mb-4 text-center text-sm text-fg-secondary">&ldquo;{text.trim()}&rdquo;</p>
+          {position > 1 && (
+            <div className="mb-4 rounded-lg bg-qdrant-red/10 ring-1 ring-qdrant-red/30 px-3 py-2 text-center text-[13px] text-qdrant-red">
+              You&rsquo;re #{position} in line, searches run in order
+            </div>
+          )}
           <div className="space-y-2.5">
             {STAGES.map((s, i) => (
               <div key={s} className={`flex items-center gap-3 rounded-lg px-3 py-2.5 ring-1 transition-all ${
