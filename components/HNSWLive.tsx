@@ -161,6 +161,7 @@ export function HNSWLive() {
       // One at a time, and never consume the next before the previous
       // phone's summary has been posted back. But a lock can never stick:
       // anything older than 90s is a wreck — clear it and move on.
+      if (!started) return; // no phone consumption before the booth is started
       const pending = pendingRemoteRef.current;
       if (pending && Date.now() - pending.since > 90_000) {
         pendingRemoteRef.current = null;
@@ -204,7 +205,7 @@ export function HNSWLive() {
     }, 2500);
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [customQ, embedState]);
+  }, [customQ, embedState, started]);
 
   const [latest, setLatest] = useState<{
     text: string;
@@ -277,6 +278,9 @@ export function HNSWLive() {
   const [exactMode, setExactMode] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
   const [consoleOpen, setConsoleOpen] = useState(true);
+  // The loop stays parked until someone confirms the setup once. After that
+  // first start it runs forever, settings card or not.
+  const [started, setStarted] = useState(false);
   const [compareKeyword, setCompareKeyword] = useState(false);
   const [rerankMode, setRerankMode] = useState(false);
   const [hybridMode, setHybridMode] = useState(false);
@@ -404,14 +408,14 @@ export function HNSWLive() {
 
   // ── phase machine ──
   useEffect(() => {
-    if (!current || phase !== "typing") return;
+    if (!started || !current || phase !== "typing") return;
     if (typed.length >= current.text.length) {
       const t = setTimeout(() => setPhase("encoding"), 350);
       return () => clearTimeout(t);
     }
     const t = setTimeout(() => setTyped(current.text.slice(0, typed.length + 1)), TYPE_CHAR_MS);
     return () => clearTimeout(t);
-  }, [typed, phase, current]);
+  }, [typed, phase, current, started]);
 
   useEffect(() => {
     if (!current || phase !== "encoding") return;
@@ -1004,10 +1008,10 @@ export function HNSWLive() {
                   </div>
                   <div className="pt-4 shrink-0">
                     <button
-                      onClick={() => setConsoleOpen(false)}
+                      onClick={() => { setConsoleOpen(false); setStarted(true); }}
                       className="w-full rounded-md bg-qdrant-red py-2.5 text-sm font-semibold text-white transition-opacity hover:opacity-90"
                     >
-                      Watch it search
+                      {started ? "Watch it search" : "Start the demo"}
                     </button>
                     <button
                       onClick={resetDefaults}
