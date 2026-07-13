@@ -83,14 +83,23 @@ export default function RemotePage() {
         startStages();
       }
 
-      // Poll for the booth's summary — budget for the whole line ahead.
+      // Poll for the booth's summary. Budget for the whole line ahead PLUS
+      // one invisible in-flight run (a consumed search no longer counts in
+      // the queue, so "position 1" can still mean "after the current one").
       const started = Date.now();
-      const deadline = 45000 + queueDelay;
+      const deadline = 60000 + PER_RUN_MS + queueDelay;
+      const hardStop = deadline + 45000;
       pollRef.current = setInterval(async () => {
-        if (Date.now() - started > deadline) {
+        const elapsed = Date.now() - started;
+        if (elapsed > hardStop) {
           stopTimers();
-          setPhase("timeout");
+          setPhase((p) => (p === "done" ? p : "timeout"));
           return;
+        }
+        if (elapsed > deadline) {
+          // Show "busy" but keep listening — if the summary lands late,
+          // upgrade to it instead of stranding the visitor.
+          setPhase((p) => (p === "waiting" ? "timeout" : p));
         }
         try {
           const rr = await fetch(`/api/remote/result?id=${d.id}`, { cache: "no-store" });
@@ -303,9 +312,13 @@ export default function RemotePage() {
 
       {phase === "timeout" && (
         <div className="w-full max-w-[440px] text-center">
-          <p className="text-sm text-fg-secondary">The screen looks busy. Your search may still show up there.</p>
-          <button onClick={reset} className="mt-4 w-full rounded-lg bg-qdrant-red py-3 text-base font-semibold text-white">
-            Try again
+          <div className="mx-auto mb-3 h-2.5 w-2.5 rounded-full bg-qdrant-red animate-pulse" />
+          <p className="text-sm text-fg-secondary">
+            The screen is busy — still listening for your result. If your search
+            already played up there, the summary should arrive any moment.
+          </p>
+          <button onClick={reset} className="mt-5 w-full rounded-lg bg-qdrant-red py-3 text-base font-semibold text-white">
+            Start over instead
           </button>
         </div>
       )}
