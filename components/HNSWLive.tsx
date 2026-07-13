@@ -2048,28 +2048,50 @@ function DistanceViz({ metric }: { metric: "cosine" | "dot" | "euclid" }) {
   );
 }
 
-/** The real query vector painted as 64 sampled color strips. */
+/**
+ * The real query vector painted as 64 sampled color strips.
+ * Hover any strip to see the dimension it samples and its actual value.
+ */
 function VectorStrip({ vector }: { vector: number[] }) {
-  const cells = useMemo(() => {
-    const n = 64;
-    return Array.from({ length: n }, (_, i) => vector[Math.floor((i / n) * vector.length)] ?? 0);
-  }, [vector]);
+  const N = 64;
+  const cells = useMemo(
+    () =>
+      Array.from({ length: N }, (_, i) => {
+        const dim = Math.floor((i / N) * vector.length);
+        return { dim, v: vector[dim] ?? 0 };
+      }),
+    [vector],
+  );
+  const [hover, setHover] = useState<number | null>(null);
+
   return (
-    <div className="flex h-16 w-full max-w-[720px] gap-[3px] items-end">
-      {cells.map((v, i) => {
+    <div className="flex h-16 w-full max-w-[720px] gap-[3px] items-end cursor-crosshair">
+      {cells.map(({ dim, v }, i) => {
         const t = Math.max(0, Math.min(1, (v + 0.25) * 2)); // roughly normalize
+        const isHover = hover === i;
         return (
           <motion.div
             key={i}
             initial={{ scaleY: 0 }}
             animate={{ scaleY: 1 }}
             transition={{ duration: 0.3, delay: i * 0.012 }}
-            className="flex-1 rounded-sm origin-bottom"
+            onMouseEnter={() => setHover(i)}
+            onMouseLeave={() => setHover(null)}
+            className="relative flex-1 rounded-sm origin-bottom"
             style={{
               height: `${20 + t * 80}%`,
               background: `linear-gradient(180deg, ${t > 0.6 ? "#DC244C" : "#6047FF"}, rgba(96,71,255,0.25))`,
+              filter: isHover ? "brightness(1.6)" : undefined,
+              outline: isHover ? "1px solid rgba(255,255,255,0.7)" : undefined,
             }}
-          />
+          >
+            {isHover && (
+              <div className="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 -translate-x-1/2 whitespace-nowrap rounded-md card-glass-strong px-3 py-1.5 text-center">
+                <div className="font-mono text-[13px] text-fg-primary">{v.toFixed(4)}</div>
+                <div className="text-[10px] text-fg-secondary">dimension {dim} of 384</div>
+              </div>
+            )}
+          </motion.div>
         );
       })}
     </div>
