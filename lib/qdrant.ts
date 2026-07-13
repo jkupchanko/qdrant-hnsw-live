@@ -226,7 +226,9 @@ export async function pushRemoteQuery(text: string, options?: RemoteOptions): Pr
     );
     position = res.result.points.length + 1;
   } catch { /* fresh collection */ }
-  const id = Math.floor(Date.now() % 2147483647);
+  // Random 31-bit id — Date.now() collides when two phones submit in the
+  // same millisecond, and a colliding upsert silently overwrites the first.
+  const id = Math.floor(Math.random() * 2147483647);
   await qdrant(`/collections/${REMOTE}/points?wait=true`, {
     points: [{
       id,
@@ -246,7 +248,7 @@ export async function popRemoteQuery(): Promise<{ id: number; text: string; opti
     const points = res.result.points.filter((p) => p.payload?.text);
     if (!points.length) return null;
     // Strict FIFO: oldest first. Consume ONLY that one — the rest stay queued.
-    points.sort((a, b) => (a.payload?.ts ?? a.id) - (b.payload?.ts ?? b.id));
+    points.sort((a, b) => (a.payload?.ts ?? 0) - (b.payload?.ts ?? 0));
     const first = points[0];
     await qdrant(`/collections/${REMOTE}/points/delete?wait=true`, { points: [first.id] });
     return {

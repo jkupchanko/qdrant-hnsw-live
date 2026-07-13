@@ -156,7 +156,9 @@ export function HNSWLive() {
   const pendingRemoteRef = useRef<{ id: number; text: string } | null>(null);
   useEffect(() => {
     const t = setInterval(async () => {
-      if (customQ || embedState === "loading") return; // one at a time
+      // One at a time, and never consume the next before the previous
+      // phone's summary has been posted back.
+      if (customQ || embedState === "loading" || pendingRemoteRef.current) return;
       try {
         const r = await fetch("/api/remote", { cache: "no-store" });
         if (!r.ok) return;
@@ -623,6 +625,7 @@ export function HNSWLive() {
       if (customQ) {
         setCustomQ(null); // the visitor's query ran once, resume the bank
         setCustomSource(null);
+        pendingRemoteRef.current = null; // never let a failed run jam the queue
       } else {
         setQIdx((n) => (n + 1) % Math.max(queries.length, 1));
       }
