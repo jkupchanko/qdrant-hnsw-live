@@ -181,6 +181,136 @@ export function CompareLab({ active }: { active: boolean }) {
     if (lastVector) runFaceoff(lastVector, g);
   }
 
+  // ---- Real tests: every number below is measured on the cluster, on demand.
+
+  const [recallTest, setRecallTest] = useState<{
+    exactMs: number;
+    rows: Array<{ ef: number; ms: number; recall: number }>;
+  } | null>(null);
+  const [recallRunning, setRecallRunning] = useState(false);
+
+  async function runRecallTest() {
+    if (!lastVector || recallRunning) return;
+    setRecallRunning(true);
+    setRecallTest(null);
+    try {
+      // Exact scan is the correct answer by definition. Everything else is
+      // scored against it.
+      const exact = await postJson<{ hits: SearchHit[]; serverTimeMs: number }>("/api/search", {
+        vector: lastVector,
+        limit: 10,
+        exact: true,
+      });
+      const truth = new Set(exact.hits.map((h) => h.id));
+      const efs = [16, 64, 128, 512];
+      const runs = await Promise.all(
+        efs.map((ef) =>
+          postJson<{ hits: SearchHit[]; serverTimeMs: number }>("/api/search", {
+            vector: lastVector,
+            limit: 10,
+            ef,
+          }),
+        ),
+      );
+      setRecallTest({
+        exactMs: exact.serverTimeMs,
+        rows: runs.map((r, i) => ({
+          ef: efs[i],
+          ms: r.serverTimeMs,
+          recall: r.hits.filter((h) => truth.has(h.id)).length / Math.max(truth.size, 1),
+        })),
+      });
+    } catch {
+      setRecallTest(null);
+    } finally {
+      setRecallRunning(false);
+    }
+  }
+
+  const LAT_RUNS = 25;
+  const [latTest, setLatTest] = useState<{ times: number[]; p50: number; p95: number; max: number } | null>(null);
+  const [latProgress, setLatProgress] = useState(0);
+  const [latRunning, setLatRunning] = useState(false);
+
+  async function runLatencyTest() {
+    if (latRunning) return;
+    setLatRunning(true);
+    setLatTest(null);
+    setLatProgress(0);
+    try {
+      // Prebuilt query vectors from the corpus bundle: 25 different searches,
+      // fired one after another, cluster time recorded for each.
+      const r = await fetch("/data/queries.json", { cache: "force-cache" });
+      const qs: Array<{ text: string; vector: number[] }> = await r.json();
+      const times: number[] = [];
+      for (let i = 0; i < LAT_RUNS; i++) {
+        const q = qs[(i * 7 + 3) % qs.length];
+        const d = await postJson<{ serverTimeMs: number }>("/api/search", {
+          vector: q.vector,
+          limit: 5,
+          ef: 64,
+        });
+        times.push(d.serverTimeMs);
+        setLatProgress(i + 1);
+      }
+      const sorted = [...times].sort((a, b) => a - b);
+      setLatTest({
+        times,
+        p50: sorted[Math.floor(0.5 * (sorted.length - 1))],
+        p95: sorted[Math.floor(0.95 * (sorted.length - 1))],
+        max: sorted[sorted.length - 1],
+      });
+    } catch {
+      setLatTest(null);
+    } finally {
+      setLatRunning(false);
+    }
+  }
+
+  const INDEX_VARIANTS = [
+    { key: "default", label: "Cosine, m 16" },
+    { key: "dot", label: "Dot product" },
+    { key: "euclid", label: "Euclidean" },
+    { key: "m4", label: "Sparse graph, m 4" },
+    { key: "m64", label: "Dense graph, m 64" },
+  ];
+  const [varTest, setVarTest] = useState<Array<{
+    key: string;
+    label: string;
+    ms: number | null;
+    top: string;
+    overlap: number | null;
+  }> | null>(null);
+  const [varRunning, setVarRunning] = useState(false);
+
+  async function runVariantTest() {
+    if (!lastVector || varRunning) return;
+    setVarRunning(true);
+    setVarTest(null);
+    const results = await Promise.all(
+      INDEX_VARIANTS.map((v) =>
+        postJson<{ hits: SearchHit[]; serverTimeMs: number }>("/api/search", {
+          vector: lastVector!,
+          limit: 5,
+          ...(v.key !== "default" ? { variant: v.key } : { ef: 64 }),
+        })
+          .then((d) => ({ ...v, ms: d.serverTimeMs, hits: d.hits }))
+          .catch(() => ({ ...v, ms: null, hits: [] as SearchHit[] })),
+      ),
+    );
+    const base = new Set(results[0].hits.map((h) => h.id));
+    setVarTest(
+      results.map((r, i) => ({
+        key: r.key,
+        label: r.label,
+        ms: r.ms,
+        top: r.hits[0]?.payload?.title ?? "no result",
+        overlap: i === 0 ? null : r.hits.filter((h) => base.has(h.id)).length,
+      })),
+    );
+    setVarRunning(false);
+  }
+
   async function run(text: string) {
     const clean = text.trim();
     if (!clean || running) return;
@@ -550,6 +680,162 @@ export function CompareLab({ active }: { active: boolean }) {
           </div>
         </section>
       )}
+
+      {/* Real tests, run on demand against the live cluster */}
+      <section className="card p-6">
+        <h3 className="text-lg font-semibold tracking-tight-brand text-fg-primary">
+          Run Real Tests
+        </h3>
+        <p className="mt-1.5 text-[13px] leading-relaxed text-fg-secondary max-w-[70ch]">
+          Benchmarks you run yourself beat benchmarks someone hands you. Each
+          test below fires real requests at this cluster when you press the
+          button, and shows whatever comes back.
+        </p>
+
+        <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-3">
+          {/* Recall vs ground truth */}
+          <div className="flex flex-col rounded-lg bg-white/[0.02] ring-1 ring-white/[0.08] p-4">
+            <h4 className="text-[14px] font-semibold text-fg-primary">Recall vs Ground Truth</h4>
+            <p className="mt-1 text-[11.5px] leading-relaxed text-fg-secondary">
+              Exact scan is the correct answer by definition. Measure how much
+              of it HNSW keeps at each ef, and what that costs.
+            </p>
+            <button
+              type="button"
+              onClick={runRecallTest}
+              disabled={!lastVector || recallRunning}
+              className="mt-3 self-start rounded-lg bg-qdrant-red px-4 py-1.5 text-[12px] font-medium text-white transition-opacity disabled:opacity-40"
+            >
+              {recallRunning ? "Measuring..." : lastVector ? "Measure Recall" : "Run a query first"}
+            </button>
+            {recallTest && (
+              <div className="mt-3 space-y-1.5">
+                <div className="flex items-center gap-2 text-[11.5px]">
+                  <span className="w-16 shrink-0 text-fg-secondary">exact</span>
+                  <span className="w-14 shrink-0 tabular-nums text-fg-primary/85">
+                    {recallTest.exactMs < 1 ? "<1" : Math.round(recallTest.exactMs)} ms
+                  </span>
+                  <span className="h-2 flex-1 rounded-sm bg-white/[0.05] overflow-hidden">
+                    <span className="block h-full w-full rounded-sm bg-white/40" />
+                  </span>
+                  <span className="w-10 shrink-0 text-right tabular-nums text-fg-secondary">100%</span>
+                </div>
+                {recallTest.rows.map(({ ef, ms, recall }) => (
+                  <div key={ef} className="flex items-center gap-2 text-[11.5px]">
+                    <span className="w-16 shrink-0 text-fg-secondary">ef {ef}</span>
+                    <span className="w-14 shrink-0 tabular-nums text-fg-primary/85">
+                      {ms < 1 ? "<1" : Math.round(ms)} ms
+                    </span>
+                    <span className="h-2 flex-1 rounded-sm bg-white/[0.05] overflow-hidden">
+                      <span
+                        className="block h-full rounded-sm bg-qdrant-red"
+                        style={{ width: `${Math.max(4, recall * 100)}%` }}
+                      />
+                    </span>
+                    <span className="w-10 shrink-0 text-right tabular-nums text-fg-primary/90">
+                      {Math.round(recall * 100)}%
+                    </span>
+                  </div>
+                ))}
+                <p className="pt-1 text-[11px] leading-relaxed text-fg-secondary">
+                  Recall at 10 against the exact top 10 for your last query.
+                  ef is a per-request dial, not a rebuild.
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* Tail latency */}
+          <div className="flex flex-col rounded-lg bg-white/[0.02] ring-1 ring-white/[0.08] p-4">
+            <h4 className="text-[14px] font-semibold text-fg-primary">Tail Latency, {LAT_RUNS} Searches</h4>
+            <p className="mt-1 text-[11.5px] leading-relaxed text-fg-secondary">
+              Averages hide the slow requests your users feel. Fire {LAT_RUNS}
+              different searches and look at the tail, not the mean.
+            </p>
+            <button
+              type="button"
+              onClick={runLatencyTest}
+              disabled={latRunning}
+              className="mt-3 self-start rounded-lg bg-qdrant-red px-4 py-1.5 text-[12px] font-medium text-white transition-opacity disabled:opacity-40"
+            >
+              {latRunning ? `Running ${latProgress}/${LAT_RUNS}...` : "Fire 25 Searches"}
+            </button>
+            {latTest && (
+              <div className="mt-3">
+                <div className="grid grid-cols-3 gap-2">
+                  {[
+                    ["p50", latTest.p50],
+                    ["p95", latTest.p95],
+                    ["max", latTest.max],
+                  ].map(([k, v]) => (
+                    <div key={k as string} className="rounded bg-white/[0.03] ring-1 ring-white/[0.05] px-2 py-1.5 text-center">
+                      <div className="text-[10px] tracking-wide text-fg-secondary/70">{k}</div>
+                      <div className="text-[15px] font-semibold tabular-nums text-fg-primary">
+                        {(v as number) < 1 ? "<1" : Math.round(v as number)}
+                        <span className="text-[10px] font-normal text-fg-secondary"> ms</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-2 flex h-10 items-end gap-[2px]">
+                  {latTest.times.map((t, i) => (
+                    <span
+                      key={i}
+                      className="flex-1 rounded-sm bg-qdrant-red/70"
+                      style={{ height: `${Math.max(8, (t / Math.max(latTest.max, 1)) * 100)}%` }}
+                      title={`${Math.round(t)} ms`}
+                    />
+                  ))}
+                </div>
+                <p className="pt-1.5 text-[11px] leading-relaxed text-fg-secondary">
+                  Cluster-reported time per search, in order. Every bar is a
+                  real request that just happened.
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* One corpus, five indexes */}
+          <div className="flex flex-col rounded-lg bg-white/[0.02] ring-1 ring-white/[0.08] p-4">
+            <h4 className="text-[14px] font-semibold text-fg-primary">One Corpus, Five Indexes</h4>
+            <p className="mt-1 text-[11.5px] leading-relaxed text-fg-secondary">
+              The same 19,907 movies live on this cluster indexed 5 ways.
+              Swapping distance metric or graph density is a routing choice,
+              not a migration.
+            </p>
+            <button
+              type="button"
+              onClick={runVariantTest}
+              disabled={!lastVector || varRunning}
+              className="mt-3 self-start rounded-lg bg-qdrant-red px-4 py-1.5 text-[12px] font-medium text-white transition-opacity disabled:opacity-40"
+            >
+              {varRunning ? "Racing..." : lastVector ? "Race the Indexes" : "Run a query first"}
+            </button>
+            {varTest && (
+              <div className="mt-3 space-y-1.5">
+                {varTest.map(({ key, label, ms, top, overlap }) => (
+                  <div key={key} className="rounded bg-white/[0.03] ring-1 ring-white/[0.05] px-2.5 py-1.5">
+                    <div className="flex items-center justify-between gap-2 text-[11.5px]">
+                      <span className="font-medium text-fg-primary/90">{label}</span>
+                      <span className="shrink-0 tabular-nums text-fg-secondary">
+                        {ms == null ? "error" : `${ms < 1 ? "<1" : Math.round(ms)} ms`}
+                      </span>
+                    </div>
+                    <div className="mt-0.5 flex items-center justify-between gap-2 text-[10.5px] text-fg-secondary">
+                      <span className="min-w-0 truncate">top: {top}</span>
+                      {overlap != null && <span className="shrink-0">{overlap}/5 same as cosine</span>}
+                    </div>
+                  </div>
+                ))}
+                <p className="pt-1 text-[11px] leading-relaxed text-fg-secondary">
+                  Vectors here live on disk. An idle collection pays a one-time
+                  warm-up on its first hit, so run the race twice and compare.
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+      </section>
 
       {/* Where the architectures differ */}
       <section className="card p-6">
