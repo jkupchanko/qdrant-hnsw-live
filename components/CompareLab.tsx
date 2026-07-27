@@ -56,6 +56,45 @@ const EXAMPLES: Array<{ q: string; why: string }> = [
 
 const LIMIT = 5;
 
+const GENRES = ["drama", "sci-fi", "thriller", "comedy", "horror"];
+
+/**
+ * Factual architecture differences, sourced from Qdrant's competitive
+ * positioning docs. Every number here is a published customer result.
+ */
+const COMPETITORS: Array<{ name: string; arch: string; diff: string; proof: string }> = [
+  {
+    name: "Pinecone",
+    arch: "Closed SaaS. Filtering is limited to post-filtering or approximate filtering, and index tuning is abstracted away.",
+    diff: "Qdrant filters inside the HNSW graph walk and exposes every parameter on this demo's settings card.",
+    proof: "Dust cut costs 2x. ConvoSearch went from 50-100 ms to 10 ms.",
+  },
+  {
+    name: "Weaviate",
+    arch: "Applies filters after the vector search runs and carries higher memory overhead per vector.",
+    diff: "One-stage filtering plus quantization and tiered storage keep recall high on cheaper hardware.",
+    proof: "Lyzr saw 300-500 ms at scale, then cut latency by 90%.",
+  },
+  {
+    name: "Elasticsearch and MongoDB",
+    arch: "Keyword-first engines with vector search added on top of legacy indexing.",
+    diff: "Qdrant is purpose built for vectors: metadata and vector search resolve in one query.",
+    proof: "GlassDollar moved when search could not scale 10x. Mixpeek wrote 80% less hybrid search code.",
+  },
+  {
+    name: "pgvector",
+    arch: "The common starter choice. At scale it means manual partition management and climbing storage.",
+    diff: "Native HNSW, automatic segment management, and multitenancy with a filter key instead of partitions.",
+    proof: "Bazaarvoice cut storage roughly 100x and dropped thousands of manual partitions.",
+  },
+  {
+    name: "Milvus and Zilliz",
+    arch: "Capable but operationally complex, and metadata filtering is JSON only.",
+    diff: "Single container or managed cloud, payload-based filtering, EU-based company.",
+    proof: "Kakao, SayOne, and Lettria evaluated Milvus and chose Qdrant.",
+  },
+];
+
 async function postJson<T>(url: string, body: unknown): Promise<T> {
   const r = await fetch(url, {
     method: "POST",
@@ -75,6 +114,72 @@ export function CompareLab({ active }: { active: boolean }) {
   const [arms, setArms] = useState<Partial<Record<ArmKey, ArmResult>>>({});
   const [error, setError] = useState<string | null>(null);
   const didAutoRun = useRef(false);
+
+  // Filtering face-off: one-stage filtered search vs the post-filter pipeline.
+  const [genre, setGenre] = useState("comedy");
+  const [lastVector, setLastVector] = useState<number[] | null>(null);
+  const [faceoff, setFaceoff] = useState<{
+    native: { ms: number; rows: ArmRow[] };
+    post: { ms: number; rows: ArmRow[]; kept: number; fetched: number; depth: number | null };
+  } | null>(null);
+  const [faceoffRunning, setFaceoffRunning] = useState(false);
+
+  async function runFaceoff(vector: number[], g: string) {
+    setFaceoffRunning(true);
+    setFaceoff(null);
+    try {
+      // Both requests hit the same cluster. The second one deliberately runs
+      // the way post-filtering architectures work: search first, filter after.
+      const [nat, un] = await Promise.all([
+        postJson<{ hits: SearchHit[]; serverTimeMs: number }>("/api/search", {
+          vector,
+          limit: LIMIT,
+          ef: 64,
+          filter: { genre: g },
+        }),
+        postJson<{ hits: SearchHit[]; serverTimeMs: number }>("/api/search", {
+          vector,
+          limit: 20,
+          ef: 64,
+        }),
+      ]);
+      const matching = un.hits.filter((h) => h.payload.genres?.includes(g));
+      const kept = matching.slice(0, LIMIT);
+      const depth =
+        kept.length >= LIMIT ? un.hits.findIndex((h) => h.id === kept[LIMIT - 1].id) + 1 : null;
+      setFaceoff({
+        native: {
+          ms: nat.serverTimeMs,
+          rows: nat.hits.map((h) => ({
+            id: h.id,
+            payload: h.payload,
+            right: `${Math.round(h.score * 100)}%`,
+          })),
+        },
+        post: {
+          ms: un.serverTimeMs,
+          rows: kept.map((h) => ({
+            id: h.id,
+            payload: h.payload,
+            right: `rank ${un.hits.findIndex((u) => u.id === h.id) + 1}`,
+          })),
+          kept: kept.length,
+          fetched: un.hits.length,
+          depth,
+        },
+      });
+    } catch {
+      setFaceoff(null);
+    } finally {
+      setFaceoffRunning(false);
+    }
+  }
+
+  function pickGenre(g: string) {
+    if (faceoffRunning) return;
+    setGenre(g);
+    if (lastVector) runFaceoff(lastVector, g);
+  }
 
   async function run(text: string) {
     const clean = text.trim();
@@ -160,6 +265,8 @@ export function CompareLab({ active }: { active: boolean }) {
 
     await Promise.allSettled([keyword, exact, hnsw, hybrid]);
     setRunning(false);
+    setLastVector(vector);
+    runFaceoff(vector, genre);
   }
 
   // First time the tab opens, run a query that shows the gap immediately.
@@ -340,6 +447,137 @@ export function CompareLab({ active }: { active: boolean }) {
         </section>
       )}
 
+      {/* Filtering face-off: the architectural difference, measured live */}
+      {lastVector && (
+        <section className="card p-6">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h3 className="text-lg font-semibold tracking-tight-brand text-fg-primary">
+                Filtering Face-Off, Live
+              </h3>
+              <p className="mt-1.5 text-[13px] leading-relaxed text-fg-secondary max-w-[62ch]">
+                Same query, same genre filter, two architectures. Pinecone limits
+                filtering to post-filtering or approximate filtering, and Weaviate
+                applies filters after the search. Qdrant evaluates the filter
+                inside the graph walk itself. Both columns run on this cluster so
+                you can watch the difference.
+              </p>
+            </div>
+            <div className="flex items-center gap-1.5">
+              {GENRES.map((g) => (
+                <button
+                  key={g}
+                  type="button"
+                  disabled={faceoffRunning}
+                  onClick={() => pickGenre(g)}
+                  className={`rounded-full px-3 py-1 text-[11px] font-medium transition-all ${
+                    genre === g
+                      ? "bg-qdrant-red text-white"
+                      : "bg-white/[0.04] ring-1 ring-white/[0.08] text-fg-primary/80 hover:ring-qdrant-red/60"
+                  }`}
+                >
+                  {g}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div className="rounded-lg bg-white/[0.02] ring-1 ring-qdrant-red/40 p-4">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <h4 className="text-[14px] font-semibold text-qdrant-red">One-Stage Filtering</h4>
+                  <p className="mt-0.5 text-[11px] text-fg-secondary">
+                    Qdrant walks the graph with the filter applied at every hop.
+                  </p>
+                </div>
+                {faceoff && (
+                  <span className="rounded-full bg-white/[0.06] px-2.5 py-0.5 text-[11px] font-medium tabular-nums text-fg-primary">
+                    {faceoff.native.ms < 1 ? "<1" : Math.round(faceoff.native.ms)} ms
+                  </span>
+                )}
+              </div>
+              <div className="mt-2.5 space-y-1">
+                {faceoffRunning && (
+                  <div className="rounded bg-white/[0.03] px-2 py-3 text-center text-[11px] text-fg-secondary">running...</div>
+                )}
+                {faceoff?.native.rows.map((row) => (
+                  <MovieRow key={`fn-${row.id}`} row={row} />
+                ))}
+              </div>
+              {faceoff && (
+                <p className="mt-2.5 text-[11.5px] font-medium text-fg-primary/85">
+                  {faceoff.native.rows.length} of {LIMIT} slots filled. Every hit matches the filter.
+                </p>
+              )}
+            </div>
+
+            <div className="rounded-lg bg-white/[0.02] ring-1 ring-white/[0.08] p-4">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <h4 className="text-[14px] font-semibold text-fg-primary">Post-Filtering Pipeline</h4>
+                  <p className="mt-0.5 text-[11px] text-fg-secondary">
+                    Search first, discard non-matches after. Run here on the same cluster.
+                  </p>
+                </div>
+                {faceoff && (
+                  <span className="rounded-full bg-white/[0.06] px-2.5 py-0.5 text-[11px] font-medium tabular-nums text-fg-primary">
+                    {faceoff.post.ms < 1 ? "<1" : Math.round(faceoff.post.ms)} ms
+                  </span>
+                )}
+              </div>
+              <div className="mt-2.5 space-y-1">
+                {faceoffRunning && (
+                  <div className="rounded bg-white/[0.03] px-2 py-3 text-center text-[11px] text-fg-secondary">running...</div>
+                )}
+                {faceoff && faceoff.post.rows.length === 0 && (
+                  <div className="rounded bg-white/[0.03] px-2 py-3 text-center text-[11px] text-fg-secondary">
+                    none of the top {faceoff.post.fetched} matched the filter
+                  </div>
+                )}
+                {faceoff?.post.rows.map((row) => (
+                  <MovieRow key={`fp-${row.id}`} row={row} />
+                ))}
+              </div>
+              {faceoff && (
+                <p className="mt-2.5 text-[11.5px] font-medium text-fg-primary/85">
+                  {faceoff.post.depth != null
+                    ? `Filled ${LIMIT} slots, but had to dig to rank ${faceoff.post.depth} of the unfiltered list.`
+                    : `Only ${faceoff.post.kept} of ${LIMIT} slots filled from the top ${faceoff.post.fetched}. The rest silently vanish, or you over-fetch and pay for it.`}
+                </p>
+              )}
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* Where the architectures differ */}
+      <section className="card p-6">
+        <h3 className="text-lg font-semibold tracking-tight-brand text-fg-primary">
+          Where the Architectures Differ
+        </h3>
+        <p className="mt-1.5 text-[13px] leading-relaxed text-fg-secondary max-w-[70ch]">
+          Factual differences, anchored to published customer results. No
+          staged benchmarks: the live numbers on this page come from the demo
+          cluster you are looking at.
+        </p>
+        <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {COMPETITORS.map(({ name, arch, diff, proof }) => (
+            <article key={name} className="flex flex-col rounded-lg bg-white/[0.03] ring-1 ring-white/[0.05] p-4">
+              <h4 className="text-[13.5px] font-semibold text-fg-primary">vs {name}</h4>
+              <p className="mt-1.5 text-[12px] leading-relaxed text-fg-secondary">{arch}</p>
+              <p className="mt-1.5 text-[12px] leading-relaxed text-fg-primary/85">
+                <span className="font-medium text-qdrant-red">Qdrant: </span>
+                {diff}
+              </p>
+              <p className="mt-auto pt-2 text-[11px] leading-relaxed text-fg-secondary/90 border-t border-white/[0.06]">
+                {proof}
+              </p>
+            </article>
+          ))}
+        </div>
+      </section>
+
       {/* Why flexibility wins + who switched */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <section className="card p-6">
@@ -413,6 +651,24 @@ export function CompareLab({ active }: { active: boolean }) {
           </div>
         </section>
       </div>
+    </div>
+  );
+}
+
+function MovieRow({ row }: { row: ArmRow }) {
+  return (
+    <div className="flex w-full items-center gap-2 rounded bg-white/[0.04] ring-1 ring-white/[0.06] px-2 py-1.5">
+      <span
+        aria-hidden
+        className="h-8 w-6 shrink-0 rounded-sm bg-cover bg-center"
+        style={{
+          background: row.payload.poster
+            ? `url(${row.payload.poster}) center/cover`
+            : `linear-gradient(140deg, hsl(${row.payload.hue ?? 220},58%,32%), hsl(${((row.payload.hue ?? 220) + 30) % 360},48%,14%))`,
+        }}
+      />
+      <span className="min-w-0 flex-1 truncate text-[11.5px] text-fg-primary/90">{row.payload.title}</span>
+      <span className="shrink-0 text-[10px] text-fg-secondary">{row.right}</span>
     </div>
   );
 }
