@@ -19,6 +19,7 @@ export async function POST(req: Request) {
     const hits = points.map((p) => ({
       id: Number(p.id),
       title: (p.payload as { title?: string })?.title ?? "",
+      payload: p.payload,
     }));
     return NextResponse.json(
       { hits, serverTimeMs: Math.round(timeMs * 10) / 10 },

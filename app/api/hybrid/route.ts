@@ -29,11 +29,14 @@ export async function POST(req: Request) {
   const qTokens = tokens(body.text);
 
   try {
-    const t0 = performance.now();
     const [dense, kwRaw] = await Promise.all([
       searchByVector({ vector: body.vector, limit: 20 }),
       keywordSearch({ text: body.text, limit: 50 }),
     ]);
+    // Cluster time, not our wall clock: both sub-searches run in parallel on
+    // Qdrant, so the honest figure is the slower of the two server-reported
+    // times. Wall clock here would silently include two network round trips.
+    const clusterMs = Math.max(dense.timeMs, kwRaw.timeMs);
 
     // Lexical ranking: unique query tokens matched, then shorter docs first.
     const kwRanked = kwRaw.points
@@ -69,7 +72,7 @@ export async function POST(req: Request) {
       kwTotal: kwRaw.points.length,
       sem: dense.points.slice(0, limit).map((p) => ({ id: Number(p.id), score: p.score, payload: p.payload })),
       hybrid,
-      serverTimeMs: Math.round((performance.now() - t0) * 10) / 10,
+      serverTimeMs: Math.round(clusterMs * 10) / 10,
     }, { headers: { "cache-control": "no-store" } });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";

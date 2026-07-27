@@ -6,6 +6,7 @@ import { loadMovies, loadQueries } from "@/lib/data";
 import { GENRE_COLOR, GENRE_ORDER, colorFor } from "@/lib/genres";
 import type { Movie, MoviePayload, Query, SearchHit } from "@/lib/types";
 import { QdrantLogo } from "./QdrantLogo";
+import { CompareLab } from "./CompareLab";
 import QRCode from "qrcode";
 import { embedText, rerankPairs } from "@/lib/embed";
 
@@ -23,7 +24,7 @@ const REPO_URL = "https://github.com/jkupchanko/qdrant-hnsw-live";
  */
 
 type Phase = "typing" | "encoding" | "walking" | "results" | "hold" | "clearing";
-type Tab = "demo" | "inside";
+type Tab = "demo" | "inside" | "compare";
 
 const WALK_MS = 2600;
 const RESULTS_MS = 800;
@@ -811,6 +812,7 @@ export function HNSWLive() {
         {/* Tabs — pinned to true center regardless of side content */}
         <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 mt-1 flex items-center gap-1 rounded-md bg-white/[0.04] ring-1 ring-white/[0.06] p-1">
           <TabButton active={tab === "demo"} onClick={() => setTab("demo")}>Live demo</TabButton>
+          <TabButton active={tab === "compare"} onClick={() => setTab("compare")}>Compare</TabButton>
           <TabButton active={tab === "inside"} onClick={() => setTab("inside")}>Under the hood</TabButton>
         </div>
         <div className="flex items-center gap-2 text-xs text-fg-secondary/70">
@@ -1352,6 +1354,11 @@ export function HNSWLive() {
             </div>
           )}
         </div>
+      </main>
+
+      {/* ─── COMPARE TAB ─── */}
+      <main className={`flex-1 min-h-0 px-10 pb-8 overflow-y-auto ${tab === "compare" ? "block" : "hidden"}`}>
+        <CompareLab active={tab === "compare"} />
       </main>
 
       {/* ─── UNDER THE HOOD TAB ─── */}
