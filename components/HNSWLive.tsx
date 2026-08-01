@@ -363,16 +363,6 @@ export function HNSWLive() {
 
   const [clusterInfo, setClusterInfo] = useState<ClusterInfo | null>(null);
   const [variantsInfo, setVariantsInfo] = useState<VariantRow[]>([]);
-  // Size of the second collection, on the other cluster. Null until it answers,
-  // so the header degrades to the movies-only wording instead of showing a gap.
-  const [productsCount, setProductsCount] = useState<number | null>(null);
-
-  useEffect(() => {
-    fetch("/api/dataset?key=products", { cache: "no-store" })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => d && !d.error && typeof d.points === "number" && setProductsCount(d.points))
-      .catch(() => {});
-  }, []);
 
   // ── data ──
   useEffect(() => {
@@ -819,11 +809,9 @@ export function HNSWLive() {
             {/* The tabs are absolutely centered, so this line must not grow into
                 them. Kept short, and capped as insurance on narrow screens. */}
             <div className="max-w-[42vw] truncate text-[11px] text-fg-secondary">
-              {movies.length > 0 && productsCount
-                ? `${movies.length.toLocaleString()} movies and ${productsCount.toLocaleString()} products, two live clusters`
-                : movies.length > 0
-                  ? `${movies.length.toLocaleString()} movies on one live cluster`
-                  : "one live cluster"}
+              {movies.length > 0
+                ? `${movies.length.toLocaleString()} movies on one live cluster`
+                : "one live cluster"}
             </div>
           </div>
         </div>

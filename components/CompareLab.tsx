@@ -11,10 +11,9 @@ import type { SearchHit } from "@/lib/types";
  * this request; nothing is staged. Keyword is allowed to win where it should
  * (rare concrete words), which is exactly the setup for why hybrid exists.
  *
- * Two datasets are wired in, on two different clusters with two different
- * embedding models: 19,907 movies and 1,000,000 products. Switching datasets
- * re-runs everything, so the scale difference is something you watch rather
- * than something we assert.
+ * The dataset is chosen from the registry in lib/datasets.ts. Adding a second
+ * entry there (a larger movie collection, say) turns on the switcher above the
+ * query bar and re-runs everything against whichever is selected.
  */
 
 type ArmKey = "keyword" | "exact" | "hnsw" | "hybrid";
@@ -70,20 +69,7 @@ const EXAMPLES: Record<DatasetKey, Array<{ q: string; why: string }>> = {
     { q: "vampire", why: "One rare concrete word. Keyword wins this one, and that is fine." },
     { q: "scary movie set deep in the ocean", why: "Concept plus setting. Watch the rankings differ." },
   ],
-  products: [
-    { q: "something to cook rice in", why: "Describes a function, never names the product." },
-    { q: "Kopfhörer", why: "German for headphones. The catalog is English." },
-    { q: "hoover", why: "British word for vacuum. No token match, clear meaning." },
-    { q: "gift for a newborn", why: "Intent only. Neither word appears in the data." },
-    { q: "quelque chose pour garder le café chaud", why: "French. One model, many languages." },
-  ],
 };
-
-/** Texts used for the tail-latency test on the products dataset. */
-const PRODUCT_LAT_QUERIES = [
-  "wireless earbuds", "cordless vacuum", "office chair", "running shoes",
-  "coffee grinder", "garden hose", "baby monitor", "desk lamp",
-];
 
 const LIMIT = 5;
 const LAT_RUNS = 25;
@@ -373,9 +359,13 @@ export function CompareLab({ active }: { active: boolean }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, dataset]);
 
-  function switchDataset(next: DatasetKey) {
-    if (next === dataset || running) return;
-    const nextCfg = DATASET_META.find((d) => d.key === next)!;
+  // Takes a plain string: with a single dataset registered the key union has
+  // one member, and comparing it against itself narrows to never.
+  function switchDataset(nextKey: string) {
+    if (nextKey === dataset || running) return;
+    const nextCfg = DATASET_META.find((d) => d.key === nextKey);
+    if (!nextCfg) return;
+    const next = nextCfg.key as DatasetKey;
     const nextFilter = nextCfg.filterValues[0];
     setDataset(next);
     setFilterValue(nextFilter);
@@ -443,17 +433,10 @@ export function CompareLab({ active }: { active: boolean }) {
     setLatTest(null);
     setLatProgress(0);
     try {
-      let vectors: number[][];
-      if (dataset === "movies") {
-        // Precomputed 384-d vectors ship with the corpus bundle.
-        const r = await fetch("/data/queries.json", { cache: "force-cache" });
-        const qs: Array<{ text: string; vector: number[] }> = await r.json();
-        vectors = qs.map((q) => q.vector);
-      } else {
-        // Embed a spread of product queries once, then reuse them.
-        vectors = [];
-        for (const t of PRODUCT_LAT_QUERIES) vectors.push(await embedText(t, cfg.model));
-      }
+      // Precomputed 384-d vectors ship with the corpus bundle.
+      const r = await fetch("/data/queries.json", { cache: "force-cache" });
+      const qs: Array<{ text: string; vector: number[] }> = await r.json();
+      const vectors = qs.map((q) => q.vector);
       const times: number[] = [];
       for (let i = 0; i < LAT_RUNS; i++) {
         const v = vectors[(i * 7 + 3) % vectors.length];
@@ -535,7 +518,12 @@ export function CompareLab({ active }: { active: boolean }) {
               request.
             </p>
           </div>
-          <div className="flex items-center gap-1 rounded-lg bg-white/[0.04] ring-1 ring-white/[0.06] p-1">
+          {/* Only worth showing once there is something to switch between. */}
+          <div
+            className={`items-center gap-1 rounded-lg bg-white/[0.04] ring-1 ring-white/[0.06] p-1 ${
+              DATASET_META.length > 1 ? "flex" : "hidden"
+            }`}
+          >
             {DATASET_META.map((d) => {
               const s = stats[d.key as DatasetKey];
               return (
@@ -918,7 +906,7 @@ export function CompareLab({ active }: { active: boolean }) {
             <p className="mt-1 text-[11.5px] leading-relaxed text-fg-secondary">
               {cfg.hasVariants
                 ? "The same 19,907 movies live on this cluster indexed 5 ways. Swapping distance metric or graph density is a routing choice, not a migration."
-                : "Built for the movies dataset, which has five sibling collections with different distance metrics and graph densities. The products collection has a single index."}
+                : "This dataset has a single index. The movie corpus has five sibling collections with different distance metrics and graph densities."}
             </p>
             <button
               type="button"

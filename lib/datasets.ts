@@ -1,16 +1,16 @@
 /**
  * The demo can point at more than one collection, on more than one cluster.
+ * Right now there is exactly one: the movie corpus. A second entry lands here
+ * when the 1M movie collection is built, and the UI picks it up automatically
+ * (the dataset switcher hides itself while only one entry exists).
  *
- *   movies    19,907 film plots, 384-d MiniLM, eu-west-2
- *   products  1,000,000 catalog items, 768-d multilingual mpnet, us-west-2
- *
- * They differ in embedding model, vector size, cluster, and payload shape, so
- * everything that varies lives here and the rest of the app just passes a key
- * around. Payloads are normalized to one display shape (title / subtitle) so
- * result rows render identically whichever dataset is active.
+ * Datasets may differ in embedding model, vector size, cluster, and payload
+ * shape, so everything that varies lives here and the rest of the app just
+ * passes a key around. Payloads are normalized to one display shape
+ * (title / subtitle) so result rows render identically for any dataset.
  */
 
-export type DatasetKey = "movies" | "products";
+export type DatasetKey = "movies";
 
 export interface DatasetConfig {
   key: DatasetKey;
@@ -51,25 +51,15 @@ export const DATASETS: Record<DatasetKey, DatasetConfig> = {
     filterValues: ["drama", "sci-fi", "thriller", "comedy", "horror"],
     hasVariants: true,
   },
-  products: {
-    key: "products",
-    label: "Products",
-    blurb: "catalog items, 768-d multilingual mpnet",
-    urlEnv: "QDRANT_PRODUCTS_URL",
-    keyEnv: "QDRANT_PRODUCTS_API_KEY",
-    collectionEnv: "QDRANT_PRODUCTS_COLLECTION",
-    collectionDefault: "products_1m",
-    dim: 768,
-    model: "Xenova/paraphrase-multilingual-mpnet-base-v2",
-    textField: "description",
-    filterField: "category",
-    filterValues: ["Electronics", "Furniture", "Beauty", "Toys & Games", "Garden"],
-    hasVariants: false,
-  },
 };
 
 export function getDataset(key?: string): DatasetConfig {
-  return DATASETS[(key as DatasetKey) ?? "movies"] ?? DATASETS.movies;
+  if (!key) return DATASETS.movies;
+  const found = DATASETS[key as DatasetKey];
+  // Falling back silently would answer a request for an unknown dataset with
+  // movie data, which reads as success. Fail instead.
+  if (!found) throw new Error(`Unknown dataset "${key}".`);
+  return found;
 }
 
 /** Client-safe view: no env values, just what the UI needs to label things. */
@@ -107,19 +97,8 @@ function hueFrom(text: string): number {
   return h;
 }
 
-export function toDisplay(payload: Record<string, unknown> | undefined, dataset: DatasetKey): DisplayPayload {
+export function toDisplay(payload: Record<string, unknown> | undefined, _dataset: DatasetKey): DisplayPayload {
   const p = payload ?? {};
-  if (dataset === "products") {
-    const name = String(p.name ?? "untitled");
-    const category = String(p.category ?? "");
-    return {
-      title: name,
-      subtitle: category,
-      hue: hueFrom(category || name),
-      description: p.description ? String(p.description) : undefined,
-      facets: category ? [category] : [],
-    };
-  }
   const title = String(p.title ?? "untitled");
   const year = p.year ? String(p.year) : "";
   const allGenres = Array.isArray(p.genres) ? (p.genres as string[]) : [];
