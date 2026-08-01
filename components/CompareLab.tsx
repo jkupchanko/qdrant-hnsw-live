@@ -1,21 +1,27 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { embedText } from "@/lib/embed";
-import type { MoviePayload, SearchHit } from "@/lib/types";
+import { DATASET_META, type DatasetKey, type DisplayPayload } from "@/lib/datasets";
+import type { SearchHit } from "@/lib/types";
 
 /**
  * Compare tab: the same query races four retrieval strategies on the SAME
  * live collection, side by side. Every number is measured by the cluster on
  * this request; nothing is staged. Keyword is allowed to win where it should
  * (rare concrete words), which is exactly the setup for why hybrid exists.
+ *
+ * Two datasets are wired in, on two different clusters with two different
+ * embedding models: 19,907 movies and 1,000,000 products. Switching datasets
+ * re-runs everything, so the scale difference is something you watch rather
+ * than something we assert.
  */
 
 type ArmKey = "keyword" | "exact" | "hnsw" | "hybrid";
 
 interface ArmRow {
   id: number;
-  payload: MoviePayload;
+  payload: DisplayPayload;
   right: string;
 }
 
@@ -24,6 +30,16 @@ interface ArmResult {
   rows: ArmRow[];
   note?: string;
   error?: string;
+}
+
+interface DatasetStats {
+  collection: string;
+  points: number;
+  indexed: number;
+  status: string;
+  dim: number;
+  distance: string;
+  onDisk: boolean;
 }
 
 const ARM_META: Record<ArmKey, { title: string; caption: string; accent?: boolean }> = {
@@ -46,22 +62,32 @@ const ARM_META: Record<ArmKey, { title: string; caption: string; accent?: boolea
   },
 };
 
-const EXAMPLES: Array<{ q: string; why: string }> = [
-  { q: "machines becoming self aware", why: "A paraphrase. The plots never use these words." },
-  { q: "a heist that goes sideways", why: "Slang. Keyword needs the literal word, meaning does not." },
-  { q: "feel good story about an unlikely friendship", why: "Pure intent, zero plot vocabulary." },
-  { q: "vampire", why: "One rare concrete word. Keyword wins this one, and that is fine." },
-  { q: "scary movie set deep in the ocean", why: "Concept plus setting. Watch the rankings differ." },
+const EXAMPLES: Record<DatasetKey, Array<{ q: string; why: string }>> = {
+  movies: [
+    { q: "machines becoming self aware", why: "A paraphrase. The plots never use these words." },
+    { q: "a heist that goes sideways", why: "Slang. Keyword needs the literal word, meaning does not." },
+    { q: "feel good story about an unlikely friendship", why: "Pure intent, zero plot vocabulary." },
+    { q: "vampire", why: "One rare concrete word. Keyword wins this one, and that is fine." },
+    { q: "scary movie set deep in the ocean", why: "Concept plus setting. Watch the rankings differ." },
+  ],
+  products: [
+    { q: "something to cook rice in", why: "Describes a function, never names the product." },
+    { q: "Kopfhörer", why: "German for headphones. The catalog is English." },
+    { q: "hoover", why: "British word for vacuum. No token match, clear meaning." },
+    { q: "gift for a newborn", why: "Intent only. Neither word appears in the data." },
+    { q: "quelque chose pour garder le café chaud", why: "French. One model, many languages." },
+  ],
+};
+
+/** Texts used for the tail-latency test on the products dataset. */
+const PRODUCT_LAT_QUERIES = [
+  "wireless earbuds", "cordless vacuum", "office chair", "running shoes",
+  "coffee grinder", "garden hose", "baby monitor", "desk lamp",
 ];
 
 const LIMIT = 5;
+const LAT_RUNS = 25;
 
-const GENRES = ["drama", "sci-fi", "thriller", "comedy", "horror"];
-
-/**
- * Factual architecture differences, sourced from Qdrant's competitive
- * positioning docs. Every number here is a published customer result.
- */
 const COMPETITORS: Array<{ name: string; arch: string; diff: string; proof: string }> = [
   {
     name: "Pinecone",
@@ -106,79 +132,267 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
   return d as T;
 }
 
+interface DatasetHits {
+  hits: Array<{ id: number; score: number | null; payload: DisplayPayload }>;
+  serverTimeMs: number;
+}
+
+function ms(v: number | null | undefined) {
+  if (v == null) return "";
+  return v < 1 ? "<1 ms" : `${Math.round(v)} ms`;
+}
+
+function ResultRow({ row, dim }: { row: ArmRow; dim?: boolean }) {
+  return (
+    <div
+      className={`flex w-full items-center gap-2 rounded bg-white/[0.04] ring-1 ring-white/[0.06] px-2 py-1.5 ${
+        dim ? "opacity-65" : ""
+      }`}
+    >
+      <span
+        aria-hidden
+        className="h-8 w-6 shrink-0 rounded-sm bg-cover bg-center"
+        style={{
+          background: row.payload.poster
+            ? `url(${row.payload.poster}) center/cover`
+            : `linear-gradient(140deg, hsl(${row.payload.hue},58%,32%), hsl(${(row.payload.hue + 30) % 360},48%,14%))`,
+        }}
+      />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[11.5px] text-fg-primary/90">{row.payload.title}</span>
+        {row.payload.subtitle && (
+          <span className="block truncate text-[10px] text-fg-secondary">{row.payload.subtitle}</span>
+        )}
+      </span>
+      <span className="shrink-0 text-[10px] text-fg-secondary">{row.right}</span>
+    </div>
+  );
+}
+
 export function CompareLab({ active }: { active: boolean }) {
+  const [dataset, setDataset] = useState<DatasetKey>("movies");
+  const cfg = DATASET_META.find((d) => d.key === dataset)!;
+
+  const [stats, setStats] = useState<Partial<Record<DatasetKey, DatasetStats>>>({});
   const [query, setQuery] = useState("");
   const [running, setRunning] = useState(false);
   const [ranQuery, setRanQuery] = useState<string | null>(null);
   const [embedMs, setEmbedMs] = useState<number | null>(null);
+  const [modelLoading, setModelLoading] = useState(false);
   const [arms, setArms] = useState<Partial<Record<ArmKey, ArmResult>>>({});
   const [error, setError] = useState<string | null>(null);
-  const didAutoRun = useRef(false);
+  const didAutoRun = useRef<Partial<Record<DatasetKey, boolean>>>({});
 
-  // Filtering face-off: one-stage filtered search vs the post-filter pipeline.
-  const [genre, setGenre] = useState("comedy");
   const [lastVector, setLastVector] = useState<number[] | null>(null);
+  const [filterValue, setFilterValue] = useState(cfg.filterValues[0]);
   const [faceoff, setFaceoff] = useState<{
     native: { ms: number; rows: ArmRow[] };
     post: { ms: number; rows: ArmRow[]; kept: number; fetched: number; depth: number | null };
   } | null>(null);
   const [faceoffRunning, setFaceoffRunning] = useState(false);
 
-  async function runFaceoff(vector: number[], g: string) {
-    setFaceoffRunning(true);
-    setFaceoff(null);
-    try {
-      // Both requests hit the same cluster. The second one deliberately runs
-      // the way post-filtering architectures work: search first, filter after.
-      const [nat, un] = await Promise.all([
-        postJson<{ hits: SearchHit[]; serverTimeMs: number }>("/api/search", {
-          vector,
-          limit: LIMIT,
-          ef: 64,
-          filter: { genre: g },
-        }),
-        postJson<{ hits: SearchHit[]; serverTimeMs: number }>("/api/search", {
-          vector,
-          limit: 20,
-          ef: 64,
-        }),
-      ]);
-      const matching = un.hits.filter((h) => h.payload.genres?.includes(g));
-      const kept = matching.slice(0, LIMIT);
-      const depth =
-        kept.length >= LIMIT ? un.hits.findIndex((h) => h.id === kept[LIMIT - 1].id) + 1 : null;
-      setFaceoff({
-        native: {
-          ms: nat.serverTimeMs,
-          rows: nat.hits.map((h) => ({
-            id: h.id,
-            payload: h.payload,
-            right: `${Math.round(h.score * 100)}%`,
-          })),
-        },
-        post: {
-          ms: un.serverTimeMs,
-          rows: kept.map((h) => ({
-            id: h.id,
-            payload: h.payload,
-            right: `rank ${un.hits.findIndex((u) => u.id === h.id) + 1}`,
-          })),
-          kept: kept.length,
-          fetched: un.hits.length,
-          depth,
-        },
-      });
-    } catch {
-      setFaceoff(null);
-    } finally {
-      setFaceoffRunning(false);
+  // Live collection sizes for both datasets, so the switcher can show real scale.
+  useEffect(() => {
+    if (!active) return;
+    for (const d of DATASET_META) {
+      fetch(`/api/dataset?key=${d.key}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((s) => s && !s.error && setStats((prev) => ({ ...prev, [d.key]: s })))
+        .catch(() => {});
     }
+  }, [active]);
+
+  const runFaceoff = useCallback(
+    async (vector: number[], value: string, ds: DatasetKey) => {
+      setFaceoffRunning(true);
+      setFaceoff(null);
+      try {
+        // Both requests hit the same cluster. The second one deliberately runs
+        // the way post-filtering architectures work: search first, filter after.
+        const [nat, un] = await Promise.all([
+          postJson<DatasetHits>("/api/dataset", {
+            dataset: ds, vector, limit: LIMIT, ef: 64, filterValue: value,
+          }),
+          postJson<DatasetHits & { hits: Array<{ id: number; payload: DisplayPayload }> }>("/api/dataset", {
+            dataset: ds, vector, limit: 20, ef: 64,
+          }),
+        ]);
+        // Post-filtering can only keep what the unfiltered search happened to
+        // return. Match on the full facet list, never the truncated subtitle.
+        const matching = un.hits.filter((h) => h.payload.facets.includes(value));
+        const kept = matching.slice(0, LIMIT);
+        const depth =
+          kept.length >= LIMIT ? un.hits.findIndex((h) => h.id === kept[LIMIT - 1].id) + 1 : null;
+        setFaceoff({
+          native: {
+            ms: nat.serverTimeMs,
+            rows: nat.hits.map((h) => ({
+              id: h.id, payload: h.payload, right: h.score != null ? `${Math.round(h.score * 100)}%` : "",
+            })),
+          },
+          post: {
+            ms: un.serverTimeMs,
+            rows: kept.map((h) => ({
+              id: h.id, payload: h.payload,
+              right: `rank ${un.hits.findIndex((u) => u.id === h.id) + 1}`,
+            })),
+            kept: kept.length,
+            fetched: un.hits.length,
+            depth,
+          },
+        });
+      } catch {
+        setFaceoff(null);
+      } finally {
+        setFaceoffRunning(false);
+      }
+    },
+    [],
+  );
+
+  // filterVal is passed in rather than read from state: switching datasets sets
+  // both at once, and state updates are not visible to this closure yet.
+  const run = useCallback(
+    async (text: string, ds: DatasetKey, filterVal?: string) => {
+      const clean = text.trim();
+      if (!clean) return;
+      const conf = DATASET_META.find((d) => d.key === ds)!;
+      const faceoffValue = filterVal ?? conf.filterValues[0];
+      setQuery(clean);
+      setRunning(true);
+      setError(null);
+      setArms({});
+      setEmbedMs(null);
+      setFaceoff(null);
+
+      let vector: number[];
+      try {
+        // Each collection can only be searched with the model it was built
+        // with, so the model comes from the dataset config.
+        setModelLoading(true);
+        const t0 = performance.now();
+        vector = await embedText(clean, conf.model);
+        setEmbedMs(performance.now() - t0);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Embedding failed.");
+        setRunning(false);
+        setModelLoading(false);
+        return;
+      }
+      setModelLoading(false);
+      setRanQuery(clean);
+
+      const finish = (key: ArmKey, result: ArmResult) =>
+        setArms((prev) => ({ ...prev, [key]: result }));
+
+      const base = { dataset: ds, limit: LIMIT };
+
+      const keywordP = postJson<DatasetHits>("/api/dataset", { ...base, mode: "keyword", text: clean })
+        .then((d) => {
+          finish("keyword", {
+            ms: d.serverTimeMs,
+            rows: d.hits.map((h) => ({ id: h.id, payload: h.payload, right: "match" })),
+            note: d.hits.length === 0 ? "Those words never appear in the data." : undefined,
+          });
+          return d.hits;
+        })
+        .catch((e) => {
+          finish("keyword", { ms: null, rows: [], error: String(e.message ?? e) });
+          return [] as DatasetHits["hits"];
+        });
+
+      const exactP = postJson<DatasetHits>("/api/dataset", { ...base, vector, exact: true })
+        .then((d) =>
+          finish("exact", {
+            ms: d.serverTimeMs,
+            rows: d.hits.map((h) => ({
+              id: h.id, payload: h.payload, right: h.score != null ? `${Math.round(h.score * 100)}%` : "",
+            })),
+          }),
+        )
+        .catch((e) => finish("exact", { ms: null, rows: [], error: String(e.message ?? e) }));
+
+      const hnswP = postJson<DatasetHits>("/api/dataset", { ...base, vector, ef: 64 })
+        .then((d) => {
+          finish("hnsw", {
+            ms: d.serverTimeMs,
+            rows: d.hits.map((h) => ({
+              id: h.id, payload: h.payload, right: h.score != null ? `${Math.round(h.score * 100)}%` : "",
+            })),
+          });
+          return d.hits;
+        })
+        .catch((e) => {
+          finish("hnsw", { ms: null, rows: [], error: String(e.message ?? e) });
+          return [] as DatasetHits["hits"];
+        });
+
+      const [kwHits, semHits] = await Promise.all([keywordP, hnswP]);
+      await Promise.allSettled([exactP]);
+
+      // Reciprocal Rank Fusion over the two rank lists, computed in the open.
+      const K = 60;
+      const table = new Map<number, { payload: DisplayPayload; score: number; kw: boolean; sem: boolean }>();
+      semHits.forEach((h, i) => {
+        table.set(h.id, { payload: h.payload, score: 1 / (K + i + 1), kw: false, sem: true });
+      });
+      kwHits.forEach((h, i) => {
+        const cur = table.get(h.id);
+        if (cur) {
+          cur.score += 1 / (K + i + 1);
+          cur.kw = true;
+        } else {
+          table.set(h.id, { payload: h.payload, score: 1 / (K + i + 1), kw: true, sem: false });
+        }
+      });
+      finish("hybrid", {
+        ms: null,
+        rows: [...table.entries()]
+          .sort((a, b) => b[1].score - a[1].score)
+          .slice(0, LIMIT)
+          .map(([id, v]) => ({
+            id,
+            payload: v.payload,
+            right: v.kw && v.sem ? "both" : v.sem ? "meaning" : "words",
+          })),
+      });
+
+      setRunning(false);
+      setLastVector(vector);
+      runFaceoff(vector, faceoffValue, ds);
+    },
+    [runFaceoff],
+  );
+
+  // First time the tab opens (and on each dataset switch), show the gap immediately.
+  useEffect(() => {
+    if (active && !didAutoRun.current[dataset]) {
+      didAutoRun.current[dataset] = true;
+      run(EXAMPLES[dataset][0].q, dataset);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, dataset]);
+
+  function switchDataset(next: DatasetKey) {
+    if (next === dataset || running) return;
+    const nextCfg = DATASET_META.find((d) => d.key === next)!;
+    const nextFilter = nextCfg.filterValues[0];
+    setDataset(next);
+    setFilterValue(nextFilter);
+    setLastVector(null);
+    setFaceoff(null);
+    setArms({});
+    setRecallTest(null);
+    setLatTest(null);
+    setVarTest(null);
+    didAutoRun.current[next] = true;
+    run(EXAMPLES[next][0].q, next, nextFilter);
   }
 
-  function pickGenre(g: string) {
+  function pickFilter(v: string) {
     if (faceoffRunning) return;
-    setGenre(g);
-    if (lastVector) runFaceoff(lastVector, g);
+    setFilterValue(v);
+    if (lastVector) runFaceoff(lastVector, v, dataset);
   }
 
   // ---- Real tests: every number below is measured on the cluster, on demand.
@@ -194,22 +408,14 @@ export function CompareLab({ active }: { active: boolean }) {
     setRecallRunning(true);
     setRecallTest(null);
     try {
-      // Exact scan is the correct answer by definition. Everything else is
-      // scored against it.
-      const exact = await postJson<{ hits: SearchHit[]; serverTimeMs: number }>("/api/search", {
-        vector: lastVector,
-        limit: 10,
-        exact: true,
+      const exact = await postJson<DatasetHits>("/api/dataset", {
+        dataset, vector: lastVector, limit: 10, exact: true,
       });
       const truth = new Set(exact.hits.map((h) => h.id));
       const efs = [16, 64, 128, 512];
       const runs = await Promise.all(
         efs.map((ef) =>
-          postJson<{ hits: SearchHit[]; serverTimeMs: number }>("/api/search", {
-            vector: lastVector,
-            limit: 10,
-            ef,
-          }),
+          postJson<DatasetHits>("/api/dataset", { dataset, vector: lastVector, limit: 10, ef }),
         ),
       );
       setRecallTest({
@@ -227,7 +433,6 @@ export function CompareLab({ active }: { active: boolean }) {
     }
   }
 
-  const LAT_RUNS = 25;
   const [latTest, setLatTest] = useState<{ times: number[]; p50: number; p95: number; max: number } | null>(null);
   const [latProgress, setLatProgress] = useState(0);
   const [latRunning, setLatRunning] = useState(false);
@@ -238,18 +443,21 @@ export function CompareLab({ active }: { active: boolean }) {
     setLatTest(null);
     setLatProgress(0);
     try {
-      // Prebuilt query vectors from the corpus bundle: 25 different searches,
-      // fired one after another, cluster time recorded for each.
-      const r = await fetch("/data/queries.json", { cache: "force-cache" });
-      const qs: Array<{ text: string; vector: number[] }> = await r.json();
+      let vectors: number[][];
+      if (dataset === "movies") {
+        // Precomputed 384-d vectors ship with the corpus bundle.
+        const r = await fetch("/data/queries.json", { cache: "force-cache" });
+        const qs: Array<{ text: string; vector: number[] }> = await r.json();
+        vectors = qs.map((q) => q.vector);
+      } else {
+        // Embed a spread of product queries once, then reuse them.
+        vectors = [];
+        for (const t of PRODUCT_LAT_QUERIES) vectors.push(await embedText(t, cfg.model));
+      }
       const times: number[] = [];
       for (let i = 0; i < LAT_RUNS; i++) {
-        const q = qs[(i * 7 + 3) % qs.length];
-        const d = await postJson<{ serverTimeMs: number }>("/api/search", {
-          vector: q.vector,
-          limit: 5,
-          ef: 64,
-        });
+        const v = vectors[(i * 7 + 3) % vectors.length];
+        const d = await postJson<DatasetHits>("/api/dataset", { dataset, vector: v, limit: 5, ef: 64 });
         times.push(d.serverTimeMs);
         setLatProgress(i + 1);
       }
@@ -275,11 +483,7 @@ export function CompareLab({ active }: { active: boolean }) {
     { key: "m64", label: "Dense graph, m 64" },
   ];
   const [varTest, setVarTest] = useState<Array<{
-    key: string;
-    label: string;
-    ms: number | null;
-    top: string;
-    overlap: number | null;
+    key: string; label: string; ms: number | null; top: string; overlap: number | null;
   }> | null>(null);
   const [varRunning, setVarRunning] = useState(false);
 
@@ -298,144 +502,87 @@ export function CompareLab({ active }: { active: boolean }) {
           .catch(() => ({ ...v, ms: null, hits: [] as SearchHit[] })),
       ),
     );
-    const base = new Set(results[0].hits.map((h) => h.id));
+    const baseIds = new Set(results[0].hits.map((h) => h.id));
     setVarTest(
       results.map((r, i) => ({
         key: r.key,
         label: r.label,
         ms: r.ms,
         top: r.hits[0]?.payload?.title ?? "no result",
-        overlap: i === 0 ? null : r.hits.filter((h) => base.has(h.id)).length,
+        overlap: i === 0 ? null : r.hits.filter((h) => baseIds.has(h.id)).length,
       })),
     );
     setVarRunning(false);
   }
 
-  async function run(text: string) {
-    const clean = text.trim();
-    if (!clean || running) return;
-    setQuery(clean);
-    setRunning(true);
-    setError(null);
-    setArms({});
-    setEmbedMs(null);
-
-    let vector: number[];
-    try {
-      // Embed once, up front, so each arm's latency is purely its own search.
-      const t0 = performance.now();
-      vector = await embedText(clean);
-      setEmbedMs(performance.now() - t0);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Embedding failed.");
-      setRunning(false);
-      return;
-    }
-    setRanQuery(clean);
-
-    const finish = (key: ArmKey, result: ArmResult) =>
-      setArms((prev) => ({ ...prev, [key]: result }));
-
-    const keyword = postJson<{ hits: Array<{ id: number; title: string; payload?: MoviePayload }>; serverTimeMs: number }>(
-      "/api/keyword",
-      { text: clean, limit: LIMIT },
-    )
-      .then((d) =>
-        finish("keyword", {
-          ms: d.serverTimeMs,
-          rows: d.hits
-            .filter((h) => h.payload)
-            .map((h) => ({ id: h.id, payload: h.payload as MoviePayload, right: "match" })),
-          note: d.hits.length === 0 ? "Those words never appear in any plot." : undefined,
-        }),
-      )
-      .catch((e) => finish("keyword", { ms: null, rows: [], error: String(e.message ?? e) }));
-
-    const exact = postJson<{ hits: SearchHit[]; serverTimeMs: number }>("/api/search", {
-      vector,
-      limit: LIMIT,
-      exact: true,
-    })
-      .then((d) =>
-        finish("exact", {
-          ms: d.serverTimeMs,
-          rows: d.hits.map((h) => ({ id: h.id, payload: h.payload, right: `${Math.round(h.score * 100)}%` })),
-        }),
-      )
-      .catch((e) => finish("exact", { ms: null, rows: [], error: String(e.message ?? e) }));
-
-    const hnsw = postJson<{ hits: SearchHit[]; serverTimeMs: number }>("/api/search", {
-      vector,
-      limit: LIMIT,
-      ef: 64,
-    })
-      .then((d) =>
-        finish("hnsw", {
-          ms: d.serverTimeMs,
-          rows: d.hits.map((h) => ({ id: h.id, payload: h.payload, right: `${Math.round(h.score * 100)}%` })),
-        }),
-      )
-      .catch((e) => finish("hnsw", { ms: null, rows: [], error: String(e.message ?? e) }));
-
-    const hybrid = postJson<{
-      hybrid: Array<SearchHit & { kwRank: number | null; semRank: number | null }>;
-      serverTimeMs: number;
-    }>("/api/hybrid", { vector, text: clean, limit: LIMIT })
-      .then((d) =>
-        finish("hybrid", {
-          ms: d.serverTimeMs,
-          rows: d.hybrid.map((h) => ({
-            id: h.id,
-            payload: h.payload,
-            right: h.kwRank && h.semRank ? "both" : h.kwRank ? "kw only" : "sem only",
-          })),
-        }),
-      )
-      .catch((e) => finish("hybrid", { ms: null, rows: [], error: String(e.message ?? e) }));
-
-    await Promise.allSettled([keyword, exact, hnsw, hybrid]);
-    setRunning(false);
-    setLastVector(vector);
-    runFaceoff(vector, genre);
-  }
-
-  // First time the tab opens, run a query that shows the gap immediately.
-  useEffect(() => {
-    if (active && !didAutoRun.current) {
-      didAutoRun.current = true;
-      run(EXAMPLES[0].q);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active]);
-
   const done = Object.keys(arms).length === 4 && !running;
   const kwEmpty = done && (arms.keyword?.rows.length ?? 0) === 0;
   const maxMs = Math.max(...Object.values(arms).map((a) => a?.ms ?? 0), 1);
+  const activeStats = stats[dataset];
 
   return (
     <div className="mx-auto w-full max-w-6xl space-y-6">
-      {/* Query bar */}
+      {/* Dataset switcher */}
       <section className="card p-7">
-        <h2 className="text-xl font-semibold tracking-tight-brand text-fg-primary">
-          One Query, Four Ways to Search It
-        </h2>
-        <p className="mt-1.5 text-sm leading-relaxed text-fg-secondary max-w-[62ch]">
-          Every column below runs live against the same 20,000 movies on this
-          cluster. The latency badge on each column is measured by Qdrant on
-          this exact request.
-        </p>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h2 className="text-xl font-semibold tracking-tight-brand text-fg-primary">
+              One Query, Four Ways to Search It
+            </h2>
+            <p className="mt-1.5 text-sm leading-relaxed text-fg-secondary max-w-[62ch]">
+              Every column below runs live against the same collection. The
+              latency badge on each column is measured by Qdrant on this exact
+              request.
+            </p>
+          </div>
+          <div className="flex items-center gap-1 rounded-lg bg-white/[0.04] ring-1 ring-white/[0.06] p-1">
+            {DATASET_META.map((d) => {
+              const s = stats[d.key as DatasetKey];
+              return (
+                <button
+                  key={d.key}
+                  type="button"
+                  disabled={running}
+                  onClick={() => switchDataset(d.key as DatasetKey)}
+                  className={`rounded px-4 py-1.5 text-left transition-all disabled:opacity-50 ${
+                    dataset === d.key ? "bg-fg-primary text-bg-base" : "text-fg-secondary hover:text-fg-primary"
+                  }`}
+                >
+                  <span className="block text-[13px] font-medium">{d.label}</span>
+                  <span className={`block text-[10px] ${dataset === d.key ? "opacity-70" : "opacity-80"}`}>
+                    {s ? `${s.points.toLocaleString()} points` : "..."}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {activeStats && (
+          <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-[11px] text-fg-secondary">
+            <span>
+              collection <span className="text-fg-primary/85">{activeStats.collection}</span>
+            </span>
+            <span>
+              {activeStats.dim}-d {activeStats.distance}
+            </span>
+            <span>{cfg.model.replace("Xenova/", "")}</span>
+            <span>{activeStats.indexed.toLocaleString()} indexed</span>
+            {activeStats.onDisk && <span>vectors on disk</span>}
+          </div>
+        )}
 
         <form
           className="mt-5 flex items-center gap-2"
           onSubmit={(e) => {
             e.preventDefault();
-            run(query);
+            run(query, dataset, filterValue);
           }}
         >
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Describe a movie in your own words..."
+            placeholder={dataset === "movies" ? "Describe a movie in your own words..." : "Describe a product, in any language..."}
             className="h-11 flex-1 rounded-lg bg-white/[0.04] ring-1 ring-white/[0.08] px-4 text-sm text-fg-primary placeholder:text-fg-secondary/60 outline-none focus:ring-qdrant-red/60"
           />
           <button
@@ -449,13 +596,13 @@ export function CompareLab({ active }: { active: boolean }) {
 
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <span className="text-[10px] tracking-wide text-fg-secondary/70 uppercase">Try</span>
-          {EXAMPLES.map(({ q, why }) => (
+          {EXAMPLES[dataset].map(({ q, why }) => (
             <button
               key={q}
               type="button"
               title={why}
               disabled={running}
-              onClick={() => run(q)}
+              onClick={() => run(q, dataset, filterValue)}
               className="rounded-full bg-white/[0.04] ring-1 ring-white/[0.08] px-3 py-1.5 text-[12px] text-fg-primary/85 transition-all hover:ring-qdrant-red/60 disabled:opacity-40"
             >
               {q}
@@ -468,7 +615,12 @@ export function CompareLab({ active }: { active: boolean }) {
             {error}
           </div>
         )}
-        {embedMs != null && ranQuery && (
+        {modelLoading && (
+          <div className="mt-4 text-[12px] text-fg-secondary">
+            Loading {cfg.model.replace("Xenova/", "")} in your browser. First use downloads it once.
+          </div>
+        )}
+        {embedMs != null && ranQuery && !modelLoading && (
           <div className="mt-4 text-[12px] text-fg-secondary">
             &ldquo;{ranQuery}&rdquo; embedded in your browser in {Math.round(embedMs)} ms, then sent
             to all four strategies at once.
@@ -492,13 +644,12 @@ export function CompareLab({ active }: { active: boolean }) {
                 </h3>
                 {arm?.ms != null && (
                   <span className="rounded-full bg-white/[0.06] px-2.5 py-0.5 text-[11px] font-medium tabular-nums text-fg-primary">
-                    {arm.ms < 1 ? "<1" : Math.round(arm.ms)} ms
+                    {ms(arm.ms)}
                   </span>
                 )}
               </div>
               <p className="mt-1 text-[11px] leading-relaxed text-fg-secondary">{meta.caption}</p>
 
-              {/* Relative latency bar, shared scale across arms */}
               <div className="mt-3 h-1.5 rounded-full bg-white/[0.05] overflow-hidden">
                 {arm?.ms != null && (
                   <div
@@ -525,24 +676,7 @@ export function CompareLab({ active }: { active: boolean }) {
                   </div>
                 )}
                 {arm?.rows.map((row) => (
-                  <div
-                    key={`${key}-${row.id}`}
-                    className="flex w-full items-center gap-2 rounded bg-white/[0.04] ring-1 ring-white/[0.06] px-2 py-1.5"
-                  >
-                    <span
-                      aria-hidden
-                      className="h-8 w-6 shrink-0 rounded-sm bg-cover bg-center"
-                      style={{
-                        background: row.payload.poster
-                          ? `url(${row.payload.poster}) center/cover`
-                          : `linear-gradient(140deg, hsl(${row.payload.hue ?? 220},58%,32%), hsl(${((row.payload.hue ?? 220) + 30) % 360},48%,14%))`,
-                      }}
-                    />
-                    <span className="min-w-0 flex-1 truncate text-[11.5px] text-fg-primary/90">
-                      {row.payload.title}
-                    </span>
-                    <span className="shrink-0 text-[10px] text-fg-secondary">{row.right}</span>
-                  </div>
+                  <ResultRow key={`${key}-${row.id}`} row={row} dim={key === "hybrid" && row.right === "words"} />
                 ))}
               </div>
             </section>
@@ -550,15 +684,14 @@ export function CompareLab({ active }: { active: boolean }) {
         })}
       </div>
 
-      {/* The lesson, adapted to what just happened */}
       {done && (
         <section className="card p-6 ring-1 ring-qdrant-red/25">
           <p className="text-sm leading-relaxed text-fg-primary/90 max-w-[90ch]">
             {kwEmpty ? (
               <>
                 <span className="font-semibold text-qdrant-red">What happened: </span>
-                your words never appear in any plot, so keyword search returned
-                nothing. Both vector columns still found the right movies because
+                your words never appear in the data, so keyword search returned
+                nothing. Both vector columns still found the right results because
                 they search by meaning. Exact scan proves the answer; HNSW gets
                 the same answer while touching a fraction of the vectors. That
                 gap grows with every million points you add.
@@ -577,7 +710,7 @@ export function CompareLab({ active }: { active: boolean }) {
         </section>
       )}
 
-      {/* Filtering face-off: the architectural difference, measured live */}
+      {/* Filtering face-off */}
       {lastVector && (
         <section className="card p-6">
           <div className="flex flex-wrap items-start justify-between gap-3">
@@ -586,27 +719,27 @@ export function CompareLab({ active }: { active: boolean }) {
                 Filtering Face-Off, Live
               </h3>
               <p className="mt-1.5 text-[13px] leading-relaxed text-fg-secondary max-w-[62ch]">
-                Same query, same genre filter, two architectures. Pinecone limits
-                filtering to post-filtering or approximate filtering, and Weaviate
-                applies filters after the search. Qdrant evaluates the filter
-                inside the graph walk itself. Both columns run on this cluster so
-                you can watch the difference.
+                Same query, same {cfg.filterField} filter, two architectures.
+                Pinecone limits filtering to post-filtering or approximate
+                filtering, and Weaviate applies filters after the search. Qdrant
+                evaluates the filter inside the graph walk itself. Both columns
+                run on this cluster so you can watch the difference.
               </p>
             </div>
-            <div className="flex items-center gap-1.5">
-              {GENRES.map((g) => (
+            <div className="flex flex-wrap items-center gap-1.5">
+              {cfg.filterValues.map((v) => (
                 <button
-                  key={g}
+                  key={v}
                   type="button"
                   disabled={faceoffRunning}
-                  onClick={() => pickGenre(g)}
+                  onClick={() => pickFilter(v)}
                   className={`rounded-full px-3 py-1 text-[11px] font-medium transition-all ${
-                    genre === g
+                    filterValue === v
                       ? "bg-qdrant-red text-white"
                       : "bg-white/[0.04] ring-1 ring-white/[0.08] text-fg-primary/80 hover:ring-qdrant-red/60"
                   }`}
                 >
-                  {g}
+                  {v}
                 </button>
               ))}
             </div>
@@ -623,7 +756,7 @@ export function CompareLab({ active }: { active: boolean }) {
                 </div>
                 {faceoff && (
                   <span className="rounded-full bg-white/[0.06] px-2.5 py-0.5 text-[11px] font-medium tabular-nums text-fg-primary">
-                    {faceoff.native.ms < 1 ? "<1" : Math.round(faceoff.native.ms)} ms
+                    {ms(faceoff.native.ms)}
                   </span>
                 )}
               </div>
@@ -631,9 +764,7 @@ export function CompareLab({ active }: { active: boolean }) {
                 {faceoffRunning && (
                   <div className="rounded bg-white/[0.03] px-2 py-3 text-center text-[11px] text-fg-secondary">running...</div>
                 )}
-                {faceoff?.native.rows.map((row) => (
-                  <MovieRow key={`fn-${row.id}`} row={row} />
-                ))}
+                {faceoff?.native.rows.map((row) => <ResultRow key={`fn-${row.id}`} row={row} />)}
               </div>
               {faceoff && (
                 <p className="mt-2.5 text-[11.5px] font-medium text-fg-primary/85">
@@ -652,7 +783,7 @@ export function CompareLab({ active }: { active: boolean }) {
                 </div>
                 {faceoff && (
                   <span className="rounded-full bg-white/[0.06] px-2.5 py-0.5 text-[11px] font-medium tabular-nums text-fg-primary">
-                    {faceoff.post.ms < 1 ? "<1" : Math.round(faceoff.post.ms)} ms
+                    {ms(faceoff.post.ms)}
                   </span>
                 )}
               </div>
@@ -665,9 +796,7 @@ export function CompareLab({ active }: { active: boolean }) {
                     none of the top {faceoff.post.fetched} matched the filter
                   </div>
                 )}
-                {faceoff?.post.rows.map((row) => (
-                  <MovieRow key={`fp-${row.id}`} row={row} />
-                ))}
+                {faceoff?.post.rows.map((row) => <ResultRow key={`fp-${row.id}`} row={row} />)}
               </div>
               {faceoff && (
                 <p className="mt-2.5 text-[11.5px] font-medium text-fg-primary/85">
@@ -681,19 +810,17 @@ export function CompareLab({ active }: { active: boolean }) {
         </section>
       )}
 
-      {/* Real tests, run on demand against the live cluster */}
+      {/* Real tests */}
       <section className="card p-6">
-        <h3 className="text-lg font-semibold tracking-tight-brand text-fg-primary">
-          Run Real Tests
-        </h3>
+        <h3 className="text-lg font-semibold tracking-tight-brand text-fg-primary">Run Real Tests</h3>
         <p className="mt-1.5 text-[13px] leading-relaxed text-fg-secondary max-w-[70ch]">
           Benchmarks you run yourself beat benchmarks someone hands you. Each
-          test below fires real requests at this cluster when you press the
-          button, and shows whatever comes back.
+          test below fires real requests at{" "}
+          {activeStats ? `${activeStats.points.toLocaleString()} points` : "this collection"} when
+          you press the button, and shows whatever comes back.
         </p>
 
         <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-3">
-          {/* Recall vs ground truth */}
           <div className="flex flex-col rounded-lg bg-white/[0.02] ring-1 ring-white/[0.08] p-4">
             <h4 className="text-[14px] font-semibold text-fg-primary">Recall vs Ground Truth</h4>
             <p className="mt-1 text-[11.5px] leading-relaxed text-fg-secondary">
@@ -712,20 +839,16 @@ export function CompareLab({ active }: { active: boolean }) {
               <div className="mt-3 space-y-1.5">
                 <div className="flex items-center gap-2 text-[11.5px]">
                   <span className="w-16 shrink-0 text-fg-secondary">exact</span>
-                  <span className="w-14 shrink-0 tabular-nums text-fg-primary/85">
-                    {recallTest.exactMs < 1 ? "<1" : Math.round(recallTest.exactMs)} ms
-                  </span>
+                  <span className="w-16 shrink-0 tabular-nums text-fg-primary/85">{ms(recallTest.exactMs)}</span>
                   <span className="h-2 flex-1 rounded-sm bg-white/[0.05] overflow-hidden">
                     <span className="block h-full w-full rounded-sm bg-white/40" />
                   </span>
                   <span className="w-10 shrink-0 text-right tabular-nums text-fg-secondary">100%</span>
                 </div>
-                {recallTest.rows.map(({ ef, ms, recall }) => (
+                {recallTest.rows.map(({ ef, ms: t, recall }) => (
                   <div key={ef} className="flex items-center gap-2 text-[11.5px]">
                     <span className="w-16 shrink-0 text-fg-secondary">ef {ef}</span>
-                    <span className="w-14 shrink-0 tabular-nums text-fg-primary/85">
-                      {ms < 1 ? "<1" : Math.round(ms)} ms
-                    </span>
+                    <span className="w-16 shrink-0 tabular-nums text-fg-primary/85">{ms(t)}</span>
                     <span className="h-2 flex-1 rounded-sm bg-white/[0.05] overflow-hidden">
                       <span
                         className="block h-full rounded-sm bg-qdrant-red"
@@ -745,11 +868,10 @@ export function CompareLab({ active }: { active: boolean }) {
             )}
           </div>
 
-          {/* Tail latency */}
           <div className="flex flex-col rounded-lg bg-white/[0.02] ring-1 ring-white/[0.08] p-4">
             <h4 className="text-[14px] font-semibold text-fg-primary">Tail Latency, {LAT_RUNS} Searches</h4>
             <p className="mt-1 text-[11.5px] leading-relaxed text-fg-secondary">
-              Averages hide the slow requests your users feel. Fire {LAT_RUNS}
+              Averages hide the slow requests your users feel. Fire {LAT_RUNS}{" "}
               different searches and look at the tail, not the mean.
             </p>
             <button
@@ -758,20 +880,16 @@ export function CompareLab({ active }: { active: boolean }) {
               disabled={latRunning}
               className="mt-3 self-start rounded-lg bg-qdrant-red px-4 py-1.5 text-[12px] font-medium text-white transition-opacity disabled:opacity-40"
             >
-              {latRunning ? `Running ${latProgress}/${LAT_RUNS}...` : "Fire 25 Searches"}
+              {latRunning ? `Running ${latProgress}/${LAT_RUNS}...` : `Fire ${LAT_RUNS} Searches`}
             </button>
             {latTest && (
               <div className="mt-3">
                 <div className="grid grid-cols-3 gap-2">
-                  {[
-                    ["p50", latTest.p50],
-                    ["p95", latTest.p95],
-                    ["max", latTest.max],
-                  ].map(([k, v]) => (
-                    <div key={k as string} className="rounded bg-white/[0.03] ring-1 ring-white/[0.05] px-2 py-1.5 text-center">
+                  {([["p50", latTest.p50], ["p95", latTest.p95], ["max", latTest.max]] as const).map(([k, v]) => (
+                    <div key={k} className="rounded bg-white/[0.03] ring-1 ring-white/[0.05] px-2 py-1.5 text-center">
                       <div className="text-[10px] tracking-wide text-fg-secondary/70">{k}</div>
                       <div className="text-[15px] font-semibold tabular-nums text-fg-primary">
-                        {(v as number) < 1 ? "<1" : Math.round(v as number)}
+                        {v < 1 ? "<1" : Math.round(v)}
                         <span className="text-[10px] font-normal text-fg-secondary"> ms</span>
                       </div>
                     </div>
@@ -795,30 +913,35 @@ export function CompareLab({ active }: { active: boolean }) {
             )}
           </div>
 
-          {/* One corpus, five indexes */}
           <div className="flex flex-col rounded-lg bg-white/[0.02] ring-1 ring-white/[0.08] p-4">
             <h4 className="text-[14px] font-semibold text-fg-primary">One Corpus, Five Indexes</h4>
             <p className="mt-1 text-[11.5px] leading-relaxed text-fg-secondary">
-              The same 19,907 movies live on this cluster indexed 5 ways.
-              Swapping distance metric or graph density is a routing choice,
-              not a migration.
+              {cfg.hasVariants
+                ? "The same 19,907 movies live on this cluster indexed 5 ways. Swapping distance metric or graph density is a routing choice, not a migration."
+                : "Built for the movies dataset, which has five sibling collections with different distance metrics and graph densities. The products collection has a single index."}
             </p>
             <button
               type="button"
               onClick={runVariantTest}
-              disabled={!lastVector || varRunning}
+              disabled={!lastVector || varRunning || !cfg.hasVariants}
               className="mt-3 self-start rounded-lg bg-qdrant-red px-4 py-1.5 text-[12px] font-medium text-white transition-opacity disabled:opacity-40"
             >
-              {varRunning ? "Racing..." : lastVector ? "Race the Indexes" : "Run a query first"}
+              {!cfg.hasVariants
+                ? "Switch to Movies"
+                : varRunning
+                  ? "Racing..."
+                  : lastVector
+                    ? "Race the Indexes"
+                    : "Run a query first"}
             </button>
-            {varTest && (
+            {cfg.hasVariants && varTest && (
               <div className="mt-3 space-y-1.5">
-                {varTest.map(({ key, label, ms, top, overlap }) => (
+                {varTest.map(({ key, label, ms: t, top, overlap }) => (
                   <div key={key} className="rounded bg-white/[0.03] ring-1 ring-white/[0.05] px-2.5 py-1.5">
                     <div className="flex items-center justify-between gap-2 text-[11.5px]">
                       <span className="font-medium text-fg-primary/90">{label}</span>
                       <span className="shrink-0 tabular-nums text-fg-secondary">
-                        {ms == null ? "error" : `${ms < 1 ? "<1" : Math.round(ms)} ms`}
+                        {t == null ? "error" : ms(t)}
                       </span>
                     </div>
                     <div className="mt-0.5 flex items-center justify-between gap-2 text-[10.5px] text-fg-secondary">
@@ -864,12 +987,9 @@ export function CompareLab({ active }: { active: boolean }) {
         </div>
       </section>
 
-      {/* Why flexibility wins + who switched */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <section className="card p-6">
-          <h3 className="text-lg font-semibold tracking-tight-brand text-fg-primary">
-            Why Flexibility Wins
-          </h3>
+          <h3 className="text-lg font-semibold tracking-tight-brand text-fg-primary">Why Flexibility Wins</h3>
           <p className="mt-1.5 text-[13px] leading-relaxed text-fg-secondary">
             Different workloads need different retrieval. Everything this demo
             tunes live is a per-query decision in Qdrant, not a re-architecture:
@@ -880,7 +1000,7 @@ export function CompareLab({ active }: { active: boolean }) {
               ["Distance metric and m", "swap collection variants without downtime"],
               ["Payload filters", "filter inside the graph walk, not after it"],
               ["Hybrid RRF and reranking", "add keyword signal or a cross-encoder when a query needs it"],
-              ["Multitenancy", "isolate tenants in one collection with one filter key"],
+              ["Two clusters, one UI", "this tab queries a 20K collection and a 1M collection side by side"],
             ].map(([k, v]) => (
               <li key={k} className="flex gap-2">
                 <span className="mt-[7px] h-1 w-1 shrink-0 rounded-full bg-qdrant-red" />
@@ -897,35 +1017,16 @@ export function CompareLab({ active }: { active: boolean }) {
         </section>
 
         <section className="card p-6">
-          <h3 className="text-lg font-semibold tracking-tight-brand text-fg-primary">
-            Teams That Made the Switch
-          </h3>
+          <h3 className="text-lg font-semibold tracking-tight-brand text-fg-primary">Teams That Made the Switch</h3>
           <p className="mt-1.5 text-[13px] leading-relaxed text-fg-secondary">
-            Published results from teams that migrated production search to
-            Qdrant:
+            Published results from teams that migrated production search to Qdrant:
           </p>
           <div className="mt-3 space-y-2">
             {[
-              {
-                who: "ConvoSearch",
-                from: "from Pinecone",
-                fact: "Query latency dropped from 50-100 ms to 10 ms after migrating.",
-              },
-              {
-                who: "Bazaarvoice",
-                from: "from pgvector",
-                fact: "Roughly 100x storage reduction and no more manually managed partitions.",
-              },
-              {
-                who: "GlassDollar",
-                from: "from Elasticsearch",
-                fact: "Needed to scale search 10x without degrading the experience, then moved.",
-              },
-              {
-                who: "Lyzr",
-                from: "from Weaviate",
-                fact: "Cut search latency by 90% after seeing 300-500 ms at scale.",
-              },
+              { who: "ConvoSearch", from: "from Pinecone", fact: "Query latency dropped from 50-100 ms to 10 ms after migrating." },
+              { who: "Bazaarvoice", from: "from pgvector", fact: "Roughly 100x storage reduction and no more manually managed partitions." },
+              { who: "GlassDollar", from: "from Elasticsearch", fact: "Needed to scale search 10x without degrading the experience, then moved." },
+              { who: "Lyzr", from: "from Weaviate", fact: "Cut search latency by 90% after seeing 300-500 ms at scale." },
             ].map(({ who, from, fact }) => (
               <div key={who} className="rounded-lg bg-white/[0.03] ring-1 ring-white/[0.05] px-3 py-2.5">
                 <div className="text-[13px] font-medium text-fg-primary">
@@ -937,24 +1038,6 @@ export function CompareLab({ active }: { active: boolean }) {
           </div>
         </section>
       </div>
-    </div>
-  );
-}
-
-function MovieRow({ row }: { row: ArmRow }) {
-  return (
-    <div className="flex w-full items-center gap-2 rounded bg-white/[0.04] ring-1 ring-white/[0.06] px-2 py-1.5">
-      <span
-        aria-hidden
-        className="h-8 w-6 shrink-0 rounded-sm bg-cover bg-center"
-        style={{
-          background: row.payload.poster
-            ? `url(${row.payload.poster}) center/cover`
-            : `linear-gradient(140deg, hsl(${row.payload.hue ?? 220},58%,32%), hsl(${((row.payload.hue ?? 220) + 30) % 360},48%,14%))`,
-        }}
-      />
-      <span className="min-w-0 flex-1 truncate text-[11.5px] text-fg-primary/90">{row.payload.title}</span>
-      <span className="shrink-0 text-[10px] text-fg-secondary">{row.right}</span>
     </div>
   );
 }

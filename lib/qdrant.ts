@@ -7,6 +7,8 @@
  * documented REST paths works reliably everywhere.
  */
 
+import { getDataset } from "./datasets";
+
 const URL_ENV = "QDRANT_URL";
 const KEY_ENV = "QDRANT_API_KEY";
 const COLLECTION_ENV = "QDRANT_COLLECTION";
@@ -33,6 +35,112 @@ function requireEnv(): { url: string; apiKey: string } {
     throw new Error(`${URL_ENV} and ${KEY_ENV} must be set in the environment.`);
   }
   return { url: url.replace(/\/$/, ""), apiKey };
+}
+
+/**
+ * Same idea as requireEnv, but for a named dataset, which may live on a
+ * different cluster entirely. Keys stay server-side: this module is only ever
+ * imported by route handlers, never by client components.
+ */
+function datasetEnv(dataset?: string): { url: string; apiKey: string; collection: string } {
+  const cfg = getDataset(dataset);
+  const url = process.env[cfg.urlEnv];
+  const apiKey = process.env[cfg.keyEnv];
+  if (!url || !apiKey) {
+    throw new Error(`${cfg.label} dataset needs ${cfg.urlEnv} and ${cfg.keyEnv} in the environment.`);
+  }
+  return {
+    url: url.replace(/\/$/, ""),
+    apiKey,
+    collection: process.env[cfg.collectionEnv] ?? cfg.collectionDefault,
+  };
+}
+
+/** Raw REST call against whichever cluster hosts `dataset`. */
+async function qdrantOn<T>(dataset: string | undefined, path: string, body: unknown): Promise<T> {
+  const { url, apiKey } = datasetEnv(dataset);
+  const r = await fetch(`${url}${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "api-key": apiKey },
+    body: JSON.stringify(body),
+    cache: "no-store",
+  });
+  const text = await r.text();
+  if (!r.ok) throw new Error(`Qdrant ${r.status}: ${text.slice(0, 400)}`);
+  return JSON.parse(text) as T;
+}
+
+/** Vector search against any dataset. Mirrors searchByVector's options. */
+export async function searchDataset(params: {
+  dataset?: string;
+  vector: number[];
+  limit?: number;
+  ef?: number;
+  exact?: boolean;
+  filter?: Filter;
+}): Promise<{ points: ScoredPoint[]; timeMs: number }> {
+  const { collection } = datasetEnv(params.dataset);
+  const res = await qdrantOn<RestResponse<ScoredPoint[]>>(
+    params.dataset,
+    `/collections/${collection}/points/search`,
+    {
+      vector: params.vector,
+      limit: params.limit ?? 6,
+      with_payload: true,
+      ...(params.filter ? { filter: params.filter } : {}),
+      params: { ...(params.ef ? { hnsw_ef: params.ef } : {}), exact: params.exact ?? false },
+    },
+  );
+  return { points: res.result, timeMs: res.time * 1000 };
+}
+
+/** Full-text scroll against any dataset, using that dataset's text field. */
+export async function keywordDataset(params: {
+  dataset?: string;
+  text: string;
+  limit?: number;
+}): Promise<{ points: Array<{ id: number | string; payload?: Record<string, unknown> }>; timeMs: number }> {
+  const cfg = getDataset(params.dataset);
+  const { collection } = datasetEnv(params.dataset);
+  const res = await qdrantOn<RestResponse<{ points: Array<{ id: number | string; payload?: Record<string, unknown> }> }>>(
+    params.dataset,
+    `/collections/${collection}/points/scroll`,
+    {
+      filter: { must: [{ key: cfg.textField, match: { text: params.text } }] },
+      limit: params.limit ?? 6,
+      with_payload: true,
+    },
+  );
+  return { points: res.result.points, timeMs: res.time * 1000 };
+}
+
+/** Live status and size of a dataset's collection, for the UI header. */
+export async function datasetInfo(dataset?: string): Promise<{
+  collection: string;
+  points: number;
+  indexed: number;
+  status: string;
+  dim: number;
+  distance: string;
+  onDisk: boolean;
+}> {
+  const { url, apiKey, collection } = datasetEnv(dataset);
+  const r = await fetch(`${url}/collections/${collection}`, {
+    method: "GET",
+    headers: { "api-key": apiKey },
+    cache: "no-store",
+  });
+  if (!r.ok) throw new Error(`Qdrant ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  const d = (await r.json()) as { result: CollectionInfo };
+  return {
+    collection,
+    points: d.result.points_count,
+    indexed: d.result.indexed_vectors_count,
+    status: d.result.status,
+    dim: d.result.config.params.vectors.size,
+    distance: d.result.config.params.vectors.distance,
+    onDisk: Boolean((d.result.config.params.vectors as { on_disk?: boolean }).on_disk),
+  };
 }
 
 type MatchCondition = { key: string; match: { value: string | number } };

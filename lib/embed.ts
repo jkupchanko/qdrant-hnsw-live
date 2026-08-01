@@ -4,10 +4,16 @@
  * downloads on first use, then lives in browser cache.
  */
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let pipePromise: Promise<any> | null = null;
+export const DEFAULT_MODEL = "Xenova/all-MiniLM-L6-v2";
 
-export async function embedText(text: string): Promise<number[]> {
+// One cached pipeline per model id. A collection can only be searched with the
+// model it was built with, so the caller passes the model and we keep each one
+// warm independently.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const pipes = new Map<string, Promise<any>>();
+
+export async function embedText(text: string, model: string = DEFAULT_MODEL): Promise<number[]> {
+  let pipePromise = pipes.get(model);
   if (!pipePromise) {
     pipePromise = import("@xenova/transformers")
       .then(async (m) => {
@@ -21,12 +27,13 @@ export async function embedText(text: string): Promise<number[]> {
           onnx.wasm.numThreads = 1;
           onnx.wasm.proxy = false;
         }
-        return m.pipeline("feature-extraction", "Xenova/all-MiniLM-L6-v2");
+        return m.pipeline("feature-extraction", model);
       })
       .catch((e) => {
-        pipePromise = null; // allow retry — don't poison the singleton
+        pipes.delete(model); // allow retry — don't poison the cache
         throw normalizeError(e);
       });
+    pipes.set(model, pipePromise);
   }
   try {
     const pipe = await pipePromise;
