@@ -577,7 +577,10 @@ export function HNSWLive() {
         }
         const hits = hits2;
 
-        const kw = (await kwPromise) as { hits?: Array<{ title: string }> } | null;
+        const kw = (await kwPromise) as {
+          hits?: Array<{ title: string }>;
+          totalMatching?: number;
+        } | null;
         const nodesVisited = exactMode
           ? movies.length
           : Math.round(currentEf * 2 + Math.random() * currentEf * 0.5);
@@ -591,8 +594,11 @@ export function HNSWLive() {
           exact: exactMode,
           genre: genreFilter,
           limit: topK,
-          keywordCount: compareKeyword ? (kw?.hits?.length ?? 0) : null,
-          keywordTitles: kw?.hits?.slice(0, 3).map((h) => h.title) ?? [],
+          // Documents BM25 could rank, not just how many we displayed. The
+          // interesting number is how large the lexical candidate set is
+          // compared with how few of them mean the right thing.
+          keywordCount: compareKeyword ? (kw?.totalMatching ?? 0) : null,
+          keywordTitles: kw?.hits?.slice(0, 3).map((h: { title: string }) => h.title) ?? [],
           euclid: distanceSel === "euclid",
           reranked,
           rerankMs,
@@ -1255,10 +1261,12 @@ export function HNSWLive() {
                     <div className="rounded-lg card-glass-strong px-6 py-3 text-center">
                       <div className="eyebrow">Keyword search</div>
                       <div className={`text-3xl font-semibold tracking-tight-brand ${latest.keywordCount === 0 ? "text-fg-secondary" : "text-fg-primary"}`}>
-                        {latest.keywordCount}
+                        {latest.keywordCount.toLocaleString()}
                       </div>
                       <div className="text-[10px] text-fg-secondary">
-                        {latest.keywordCount === 0 ? "those words never appear" : "exact word matches"}
+                        {latest.keywordCount === 0
+                          ? "those words never appear"
+                          : "documents contain these words"}
                       </div>
                     </div>
                     <div className="flex items-center text-fg-secondary/50 text-lg">vs</div>

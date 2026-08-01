@@ -27,6 +27,11 @@ export interface DatasetConfig {
   model: string;
   /** Payload field the full-text index covers. */
   textField: string;
+  /**
+   * Fields BM25 ranks over, with per-field boosts. Each needs a text payload
+   * index in Qdrant or its filter clause matches nothing.
+   */
+  lexicalFields: Array<{ key: string; weight: number }>;
   /** Keyword-indexed field used by the filtering face-off. */
   filterField: string;
   /** A few real values of filterField, for the face-off buttons. */
@@ -47,6 +52,11 @@ export const DATASETS: Record<DatasetKey, DatasetConfig> = {
     dim: 384,
     model: "Xenova/all-MiniLM-L6-v2",
     textField: "description",
+    // A title hit is a much stronger signal than a passing plot mention.
+    lexicalFields: [
+      { key: "title", weight: 3 },
+      { key: "description", weight: 1 },
+    ],
     filterField: "genres",
     filterValues: ["drama", "sci-fi", "thriller", "comedy", "horror"],
     hasVariants: true,

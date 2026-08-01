@@ -13,7 +13,6 @@ interface Body {
   scoreThreshold?: number;
   filter?: {
     genre?: string;
-    mood?: string;
     yearFrom?: number;
     yearTo?: number;
     tenant?: string;
@@ -38,8 +37,10 @@ export async function POST(req: Request) {
   const must = [] as Array<
     { key: string; match: { value: string } } | { key: string; range: { gte?: number; lte?: number } }
   >;
+  // No mood filter: the corpus fetcher writes an empty mood array for every
+  // film, so the payload index holds 0 points and any mood filter matches
+  // nothing. Populate mood at ingest before offering it as a control.
   if (body.filter?.genre) must.push({ key: "genres", match: { value: body.filter.genre } });
-  if (body.filter?.mood) must.push({ key: "mood", match: { value: body.filter.mood } });
   if (body.filter?.tenant) must.push({ key: "tenant", match: { value: body.filter.tenant } });
   if (body.filter?.yearFrom != null || body.filter?.yearTo != null) {
     must.push({ key: "year", range: { gte: body.filter?.yearFrom, lte: body.filter?.yearTo } });

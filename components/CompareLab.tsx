@@ -27,6 +27,8 @@ interface ArmRow {
 interface ArmResult {
   ms: number | null;
   rows: ArmRow[];
+  /** Documents in the collection matching at least one query term. */
+  total?: number;
   note?: string;
   error?: string;
 }
@@ -44,7 +46,7 @@ interface DatasetStats {
 const ARM_META: Record<ArmKey, { title: string; caption: string; accent?: boolean }> = {
   keyword: {
     title: "Keyword",
-    caption: "Full-text match on the words you typed. The classic search-engine approach.",
+    caption: "BM25 over title and plot, the ranking function real keyword engines use.",
   },
   exact: {
     title: "Exact Scan",
@@ -273,12 +275,19 @@ export function CompareLab({ active }: { active: boolean }) {
 
       const base = { dataset: ds, limit: LIMIT };
 
-      const keywordP = postJson<DatasetHits>("/api/dataset", { ...base, mode: "keyword", text: clean })
+      const keywordP = postJson<DatasetHits & { totalMatching?: number }>("/api/dataset", {
+        ...base, mode: "keyword", text: clean,
+      })
         .then((d) => {
           finish("keyword", {
             ms: d.serverTimeMs,
-            rows: d.hits.map((h) => ({ id: h.id, payload: h.payload, right: "match" })),
-            note: d.hits.length === 0 ? "Those words never appear in the data." : undefined,
+            rows: d.hits.map((h) => ({
+              id: h.id,
+              payload: h.payload,
+              right: h.score != null ? h.score.toFixed(1) : "match",
+            })),
+            total: d.totalMatching,
+            note: d.hits.length === 0 ? "No document contains any of these words." : undefined,
           });
           return d.hits;
         })
@@ -500,6 +509,11 @@ export function CompareLab({ active }: { active: boolean }) {
 
   const done = Object.keys(arms).length === 4 && !running;
   const kwEmpty = done && (arms.keyword?.rows.length ?? 0) === 0;
+  // How many of the keyword hits the vector side also picked. Zero overlap is
+  // the interesting case: keyword found plenty, just not the right things.
+  const kwIds = new Set((arms.keyword?.rows ?? []).map((r) => r.id));
+  const overlap = (arms.hnsw?.rows ?? []).filter((r) => kwIds.has(r.id)).length;
+  const kwTotal = arms.keyword?.total ?? 0;
   const maxMs = Math.max(...Object.values(arms).map((a) => a?.ms ?? 0), 1);
   const activeStats = stats[dataset];
 
@@ -673,24 +687,44 @@ export function CompareLab({ active }: { active: boolean }) {
       </div>
 
       {done && (
+        <p className="text-[11.5px] leading-relaxed text-fg-secondary">
+          Read the timings honestly. The vector and exact-scan badges are
+          Qdrant doing the whole search. The keyword badge is our BM25: several
+          round trips for corpus statistics plus scoring outside the engine,
+          because ranking lexically inside Qdrant needs BM25 sparse vectors
+          stored alongside the dense ones. Compare the result quality here, not
+          keyword latency against vector latency.
+        </p>
+      )}
+
+      {done && (
         <section className="card p-6 ring-1 ring-qdrant-red/25">
           <p className="text-sm leading-relaxed text-fg-primary/90 max-w-[90ch]">
             {kwEmpty ? (
               <>
                 <span className="font-semibold text-qdrant-red">What happened: </span>
-                your words never appear in the data, so keyword search returned
-                nothing. Both vector columns still found the right results because
+                not one document contains any of your words, so BM25 had nothing
+                to rank. The vector columns still found the right results because
                 they search by meaning. Exact scan proves the answer; HNSW gets
-                the same answer while touching a fraction of the vectors. That
-                gap grows with every million points you add.
+                the same answer while touching a fraction of the vectors.
+              </>
+            ) : overlap === 0 ? (
+              <>
+                <span className="font-semibold text-qdrant-red">What happened: </span>
+                BM25 ranked {kwTotal.toLocaleString()} documents containing your
+                words and returned its five best. The vector side picked five
+                completely different ones, and none of the keyword results
+                survived. Keyword search was not broken here: it did its job
+                perfectly and still missed the intent, because term statistics
+                cannot tell you what a sentence means.
               </>
             ) : (
               <>
                 <span className="font-semibold text-qdrant-red">What happened: </span>
-                keyword matched literal words, the vector columns ranked by
-                meaning, and hybrid fused both rank lists. When your words match
-                the data exactly, keywords are fast and precise. That is why
-                Qdrant treats dense vectors, sparse keywords, and filters as
+                {overlap} of the top five agree between BM25 and vector search,
+                so your wording lines up with the data. This is where keywords
+                shine: exact titles and rare terms are cheap and precise. That is
+                why Qdrant treats dense vectors, sparse keywords, and filters as
                 primitives you combine per query, not an either-or choice.
               </>
             )}

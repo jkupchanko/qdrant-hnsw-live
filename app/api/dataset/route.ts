@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { searchDataset, keywordDataset, datasetInfo } from "@/lib/qdrant";
+import { searchDataset, datasetInfo } from "@/lib/qdrant";
+import { lexicalSearch } from "@/lib/lexical";
 import { getDataset, toDisplay, type DatasetKey } from "@/lib/datasets";
 
 export const runtime = "nodejs";
@@ -47,20 +48,21 @@ export async function POST(req: Request) {
       if (!body.text) {
         return NextResponse.json({ error: "Keyword mode needs `text`" }, { status: 400 });
       }
-      const { points, timeMs } = await keywordDataset({
-        dataset: cfg.key,
-        text: body.text,
-        limit,
-      });
+      const lex = await lexicalSearch({ dataset: cfg.key, text: body.text, limit });
       return NextResponse.json(
         {
           dataset: cfg.key,
-          hits: points.map((p) => ({
-            id: Number(p.id),
-            score: null,
-            payload: toDisplay(p.payload, cfg.key),
+          hits: lex.hits.map((h) => ({
+            id: h.id,
+            score: h.score,
+            matched: h.matched,
+            payload: toDisplay(h.payload, cfg.key),
           })),
-          serverTimeMs: Math.round(timeMs * 10) / 10,
+          totalMatching: lex.totalMatching,
+          pooled: lex.pooled,
+          truncated: lex.truncated,
+          tokens: lex.tokens,
+          serverTimeMs: Math.round(lex.timeMs * 10) / 10,
         },
         { headers: { "cache-control": "no-store" } },
       );

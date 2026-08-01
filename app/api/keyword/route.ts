@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
-import { keywordSearch } from "@/lib/qdrant";
+import { lexicalSearch } from "@/lib/lexical";
 
 export const runtime = "nodejs";
 
-/** POST { text, limit? } — keyword (full-text) match over descriptions. */
+/** POST { text, limit? } — BM25-ranked keyword search over title and plot. */
 export async function POST(req: Request) {
   let body: { text?: string; limit?: number };
   try {
@@ -15,14 +15,20 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Body must include `text`" }, { status: 400 });
   }
   try {
-    const { points, timeMs } = await keywordSearch({ text: body.text, limit: body.limit ?? 6 });
-    const hits = points.map((p) => ({
-      id: Number(p.id),
-      title: (p.payload as { title?: string })?.title ?? "",
-      payload: p.payload,
-    }));
+    const lex = await lexicalSearch({ text: body.text, limit: body.limit ?? 6 });
     return NextResponse.json(
-      { hits, serverTimeMs: Math.round(timeMs * 10) / 10 },
+      {
+        hits: lex.hits.map((h) => ({
+          id: h.id,
+          title: String(h.payload.title ?? ""),
+          score: h.score,
+          matched: h.matched,
+          payload: h.payload,
+        })),
+        totalMatching: lex.totalMatching,
+        tokens: lex.tokens,
+        serverTimeMs: Math.round(lex.timeMs * 10) / 10,
+      },
       { headers: { "cache-control": "no-store" } },
     );
   } catch (err) {

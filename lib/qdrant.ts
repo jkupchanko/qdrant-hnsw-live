@@ -56,8 +56,13 @@ function datasetEnv(dataset?: string): { url: string; apiKey: string; collection
   };
 }
 
+/** Collection name for a dataset, for callers that build their own requests. */
+export function datasetCollection(dataset?: string): string {
+  return datasetEnv(dataset).collection;
+}
+
 /** Raw REST call against whichever cluster hosts `dataset`. */
-async function qdrantOn<T>(dataset: string | undefined, path: string, body: unknown): Promise<T> {
+export async function qdrantOn<T>(dataset: string | undefined, path: string, body: unknown): Promise<T> {
   const { url, apiKey } = datasetEnv(dataset);
   const r = await fetch(`${url}${path}`, {
     method: "POST",
@@ -94,25 +99,6 @@ export async function searchDataset(params: {
   return { points: res.result, timeMs: res.time * 1000 };
 }
 
-/** Full-text scroll against any dataset, using that dataset's text field. */
-export async function keywordDataset(params: {
-  dataset?: string;
-  text: string;
-  limit?: number;
-}): Promise<{ points: Array<{ id: number | string; payload?: Record<string, unknown> }>; timeMs: number }> {
-  const cfg = getDataset(params.dataset);
-  const { collection } = datasetEnv(params.dataset);
-  const res = await qdrantOn<RestResponse<{ points: Array<{ id: number | string; payload?: Record<string, unknown> }> }>>(
-    params.dataset,
-    `/collections/${collection}/points/scroll`,
-    {
-      filter: { must: [{ key: cfg.textField, match: { text: params.text } }] },
-      limit: params.limit ?? 6,
-      with_payload: true,
-    },
-  );
-  return { points: res.result.points, timeMs: res.time * 1000 };
-}
 
 /** Live status and size of a dataset's collection, for the UI header. */
 export async function datasetInfo(dataset?: string): Promise<{
