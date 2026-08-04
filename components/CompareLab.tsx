@@ -109,6 +109,27 @@ const COMPETITORS: Array<{ name: string; arch: string; diff: string; proof: stri
   },
 ];
 
+/**
+ * The tab is a five-step story a person can walk someone through in order.
+ * The sticky navigator makes the order explicit instead of leaving a visitor
+ * to infer it from a long scroll.
+ */
+const STEPS = [
+  { id: "step-race", n: "01", label: "The Race" },
+  { id: "step-faceoff", n: "02", label: "Filtering" },
+  { id: "step-tests", n: "03", label: "Prove It" },
+  { id: "step-competitors", n: "04", label: "vs Competitors" },
+  { id: "step-switch", n: "05", label: "Why Teams Switch" },
+];
+
+function StepChip({ n }: { n: string }) {
+  return (
+    <span className="mr-2 inline-flex h-5 min-w-5 items-center justify-center rounded bg-qdrant-red/15 px-1.5 align-middle text-[10px] font-semibold tabular-nums text-qdrant-red ring-1 ring-qdrant-red/30">
+      {n}
+    </span>
+  );
+}
+
 async function postJson<T>(url: string, body: unknown): Promise<T> {
   const r = await fetch(url, {
     method: "POST",
@@ -519,11 +540,27 @@ export function CompareLab({ active }: { active: boolean }) {
 
   return (
     <div className="mx-auto w-full max-w-6xl space-y-6">
+      {/* Step navigator — sticky, so the presenter can jump the story in order */}
+      <nav className="sticky top-0 z-30 -mb-2 flex items-center justify-center gap-1.5 rounded-lg card-glass-strong px-3 py-2">
+        {STEPS.map(({ id, n, label }) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" })}
+            className="flex items-center gap-1.5 rounded px-3 py-1 text-[12px] font-medium text-fg-secondary transition-colors hover:text-fg-primary"
+          >
+            <span className="tabular-nums text-qdrant-red">{n}</span>
+            {label}
+          </button>
+        ))}
+      </nav>
+
       {/* Dataset switcher */}
-      <section className="card p-7">
+      <section id="step-race" className="card scroll-mt-16 p-7">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <h2 className="text-xl font-semibold tracking-tight-brand text-fg-primary">
+              <StepChip n="01" />
               One Query, Four Ways to Search It
             </h2>
             <p className="mt-1.5 text-sm leading-relaxed text-fg-secondary max-w-[62ch]">
@@ -734,10 +771,11 @@ export function CompareLab({ active }: { active: boolean }) {
 
       {/* Filtering face-off */}
       {lastVector && (
-        <section className="card p-6">
+        <section id="step-faceoff" className="card scroll-mt-16 p-6">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <h3 className="text-lg font-semibold tracking-tight-brand text-fg-primary">
+                <StepChip n="02" />
                 Filtering Face-Off, Live
               </h3>
               <p className="mt-1.5 text-[13px] leading-relaxed text-fg-secondary max-w-[62ch]">
@@ -833,8 +871,11 @@ export function CompareLab({ active }: { active: boolean }) {
       )}
 
       {/* Real tests */}
-      <section className="card p-6">
-        <h3 className="text-lg font-semibold tracking-tight-brand text-fg-primary">Run Real Tests</h3>
+      <section id="step-tests" className="card scroll-mt-16 p-6">
+        <h3 className="text-lg font-semibold tracking-tight-brand text-fg-primary">
+          <StepChip n="03" />
+          Run Real Tests
+        </h3>
         <p className="mt-1.5 text-[13px] leading-relaxed text-fg-secondary max-w-[70ch]">
           Benchmarks you run yourself beat benchmarks someone hands you. Each
           test below fires real requests at{" "}
@@ -983,8 +1024,9 @@ export function CompareLab({ active }: { active: boolean }) {
       </section>
 
       {/* Where the architectures differ */}
-      <section className="card p-6">
+      <section id="step-competitors" className="card scroll-mt-16 p-6">
         <h3 className="text-lg font-semibold tracking-tight-brand text-fg-primary">
+          <StepChip n="04" />
           Where the Architectures Differ
         </h3>
         <p className="mt-1.5 text-[13px] leading-relaxed text-fg-secondary max-w-[70ch]">
@@ -1009,9 +1051,12 @@ export function CompareLab({ active }: { active: boolean }) {
         </div>
       </section>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      <div id="step-switch" className="grid scroll-mt-16 grid-cols-1 gap-4 lg:grid-cols-2">
         <section className="card p-6">
-          <h3 className="text-lg font-semibold tracking-tight-brand text-fg-primary">Why Flexibility Wins</h3>
+          <h3 className="text-lg font-semibold tracking-tight-brand text-fg-primary">
+            <StepChip n="05" />
+            Why Flexibility Wins
+          </h3>
           <p className="mt-1.5 text-[13px] leading-relaxed text-fg-secondary">
             Different workloads need different retrieval. Everything this demo
             tunes live is a per-query decision in Qdrant, not a re-architecture:

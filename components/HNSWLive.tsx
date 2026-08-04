@@ -833,6 +833,44 @@ export function HNSWLive() {
         </div>
       </header>
 
+      {/* LIVE STATS STRIP — the numbers a booth visitor asks for, on every tab:
+          what cluster, how big, which model, and how fast it has actually been
+          this session. All values are live; nothing here is hardcoded copy. */}
+      <div className="flex items-center justify-center gap-x-6 gap-y-1 flex-wrap border-b border-white/[0.05] bg-white/[0.02] px-10 py-1.5 text-[11px] text-fg-secondary">
+        <span className="flex items-center gap-1.5">
+          <span
+            className={`inline-block h-1.5 w-1.5 rounded-full ${
+              clusterInfo?.status === "green" ? "bg-emerald-400" : clusterInfo ? "bg-amber-400" : "bg-white/20"
+            }`}
+          />
+          Qdrant Cloud {clusterInfo ? clusterInfo.status : "connecting"}
+        </span>
+        <span>
+          <span className="text-fg-primary/85 font-medium tabular-nums">
+            {clusterInfo ? clusterInfo.points_count.toLocaleString() : "—"}
+          </span>{" "}
+          vectors indexed
+        </span>
+        <span>
+          {clusterInfo
+            ? `${clusterInfo.config.params.vectors.size}-d ${clusterInfo.config.params.vectors.distance}, HNSW m=${clusterInfo.config.hnsw_config.m}`
+            : "—"}
+        </span>
+        <span>
+          model <span className="text-fg-primary/85 font-medium">all-MiniLM-L6-v2</span>, embedded in your browser
+        </span>
+        <span>
+          this session:{" "}
+          {stats.p50 != null ? (
+            <span className="text-fg-primary/85 font-medium tabular-nums">
+              p50 {stats.p50} ms · p95 {stats.p95} ms
+            </span>
+          ) : (
+            "no searches yet"
+          )}
+        </span>
+      </div>
+
       {/* ─── DEMO TAB ─── */}
       <main className={`relative flex-1 min-h-0 flex-col ${tab === "demo" ? "flex" : "hidden"}`}>
         {/* Map fills the stage */}
