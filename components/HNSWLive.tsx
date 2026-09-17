@@ -9,6 +9,7 @@ import { QdrantLogo } from "./QdrantLogo";
 import { CompareLab } from "./CompareLab";
 import QRCode from "qrcode";
 import { embedText, rerankPairs } from "@/lib/embed";
+import { posterSrc } from "@/lib/poster";
 
 const REPO_URL = "https://github.com/jkupchanko/qdrant-hnsw-live";
 
@@ -28,7 +29,7 @@ type Tab = "demo" | "inside" | "compare";
 
 const WALK_MS = 2600;
 const RESULTS_MS = 800;
-const HOLD_MS = 5200;
+const HOLD_MS = 9000; // a passer-by's glance is 3-10s; the old 5.2s wiped before most of them looked up
 const HOLD_CUSTOM_MS = 16000; // a visitor's own search deserves a longer look
 const CLEAR_MS = 400;
 const TYPE_CHAR_MS = 42;
@@ -38,6 +39,35 @@ const EF_CYCLE = [16, 64, 128, 512] as const;
 const CYCLES_PER_EF = 2;
 const LAT_HISTORY = 40;
 const LOG_CAPACITY = 8;
+
+interface LatestResult {
+    text: string;
+    hits: SearchHit[];
+    clientMs: number;
+    serverMs: number;
+    ef: number;
+    nodesVisited: number;
+    exact: boolean;
+    genre: string | null;
+    limit: number;
+    keywordCount: number | null;
+    keywordTitles: string[];
+    euclid: boolean;
+    reranked: boolean;
+    rerankMs: number;
+    fetched: number;
+    /** For re-ranked hits: original ANN rank per displayed position. */
+    origRanks: number[];
+    /** The top-K in pure vector-search order, before the cross-encoder. */
+    origHits: SearchHit[];
+    /** Present when hybrid mode ran: the three-way comparison. */
+    hybrid: {
+      kw: Array<{ id: number; payload: MoviePayload; matches: number }>;
+      kwTotal: number;
+      sem: SearchHit[];
+      hyb: Array<SearchHit & { kwRank: number | null; semRank: number | null }>;
+    } | null;
+}
 
 interface Point { id: number; tx: number; ty: number; color: string }
 interface Probe {
@@ -81,14 +111,39 @@ export function HNSWLive() {
   const [movies, setMovies] = useState<Movie[]>([]);
   const [queries, setQueries] = useState<Query[]>([]);
   const [tab, setTab] = useState<Tab>("demo");
+  // ATTRACT ROTATION — nobody is standing here to press the tabs, so the
+  // screen walks them itself. Two thirds of the story (the comparison and the
+  // internals) used to be unreachable on an unattended screen. Dwell times are
+  // set so the demo tab gets several full search cycles and the two static
+  // tabs get long enough for a passer-by to read the largest three lines.
+  const [rotating, setRotating] = useState(true);
+  /**
+   * On-site knobs, because we will not know the screen until we are standing
+   * in front of it and nobody wants to redeploy from a show floor.
+   *   ?scale=1.3   multiplies the whole UI (the CSS is one rem tree)
+   *   ?dwell=0.5   multiplies every tab dwell time
+   * Both default to 1, so the plain URL is the tuned build.
+   */
+  const [dwellScale, setDwellScale] = useState(1);
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    const scale = Number(q.get("scale"));
+    if (Number.isFinite(scale) && scale >= 0.5 && scale <= 3) {
+      document.documentElement.style.setProperty("--booth-scale", String(scale));
+    }
+    const dwell = Number(q.get("dwell"));
+    if (Number.isFinite(dwell) && dwell > 0 && dwell <= 10) setDwellScale(dwell);
+  }, []);
   const [log, setLog] = useState<LogEntry[]>([]);
   const [totalOps, setTotalOps] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
   const [phase, setPhase] = useState<Phase>("typing");
-  // The loop stays parked until someone confirms the setup once. After that
-  // first start it runs forever, settings card or not.
-  const [started, setStarted] = useState(false);
+  // The screen runs unattended, so it starts itself. Nobody is there to press
+  // a button at 8am, and KioskGuard reloads the page every 12 hours — a gate
+  // here would mean day two opens on a settings form. Settings stay reachable
+  // from the corner button; they just don't block the loop.
+  const [started, setStarted] = useState(true);
 
   // Hovering the distance explorer holds the embed phase open.
   const [explorerOpen, setExplorerOpen] = useState(false);
@@ -163,9 +218,41 @@ export function HNSWLive() {
     await runCustomText(text, "screen");
   };
 
+  // Rotate tabs on a loop, and stand down for two minutes whenever a human
+  // touches anything — a staffer driving the screen should never be yanked
+  // off the tab they just opened.
+  useEffect(() => {
+    if (!rotating) return;
+    const dwell: Record<Tab, number> = { demo: 100_000, compare: 55_000, inside: 45_000 };
+    const order: Tab[] = ["demo", "compare", "inside"];
+    const t = setTimeout(() => {
+      setTab((cur) => order[(order.indexOf(cur) + 1) % order.length]);
+    }, dwell[tab] * dwellScale);
+    return () => clearTimeout(t);
+  }, [tab, rotating, dwellScale]);
+
+  useEffect(() => {
+    let resume: ReturnType<typeof setTimeout>;
+    const nudge = () => {
+      setRotating(false);
+      clearTimeout(resume);
+      resume = setTimeout(() => setRotating(true), 120_000);
+    };
+    for (const e of ["pointerdown", "keydown", "wheel"]) window.addEventListener(e, nudge, { passive: true });
+    return () => {
+      clearTimeout(resume);
+      for (const e of ["pointerdown", "keydown", "wheel"]) window.removeEventListener(e, nudge);
+    };
+  }, []);
+
   // Poll the Qdrant-backed queue for queries sent from phones (/remote).
   const pendingRemoteRef = useRef<{ id: number; text: string; since: number } | null>(null);
   const consumingRef = useRef(false);
+  // Polling every 2.5s for a whole show is ~11.5k function calls a day per
+  // screen, nearly all of them finding an empty queue. Stay at 2.5s while
+  // phones are actually in play and back off to 7.5s once they are not.
+  const lastPhoneAtRef = useRef(0);
+  const pollTickRef = useRef(0);
 
   /** Consume + start the next phone query. Returns true if one started. */
   const consumeQueue = async (): Promise<boolean> => {
@@ -192,6 +279,7 @@ export function HNSWLive() {
       if (o.rerank !== undefined) setRerankMode(!!o.rerank);
       if (o.hybrid !== undefined) setHybridMode(!!o.hybrid);
       pendingRemoteRef.current = { id: d.id, text: d.text, since: Date.now() };
+      lastPhoneAtRef.current = Date.now();
       const ok = await runCustomText(d.text, "phone");
       if (!ok) {
         pendingRemoteRef.current = null;
@@ -214,6 +302,8 @@ export function HNSWLive() {
 
   useEffect(() => {
     const t = setInterval(async () => {
+      pollTickRef.current += 1;
+      if (Date.now() - lastPhoneAtRef.current > 180_000 && pollTickRef.current % 3 !== 0) return;
       // One at a time, and never consume the next before the previous
       // phone's summary has been posted back. But a lock can never stick:
       // anything older than 90s is a wreck — clear it and move on.
@@ -230,34 +320,32 @@ export function HNSWLive() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [customQ, embedState, started]);
 
-  const [latest, setLatest] = useState<{
-    text: string;
-    hits: SearchHit[];
-    clientMs: number;
-    serverMs: number;
-    ef: number;
-    nodesVisited: number;
-    exact: boolean;
-    genre: string | null;
-    limit: number;
-    keywordCount: number | null;
-    keywordTitles: string[];
-    euclid: boolean;
-    reranked: boolean;
-    rerankMs: number;
-    fetched: number;
-    /** For re-ranked hits: original ANN rank per displayed position. */
-    origRanks: number[];
-    /** The top-K in pure vector-search order, before the cross-encoder. */
-    origHits: SearchHit[];
-    /** Present when hybrid mode ran: the three-way comparison. */
-    hybrid: {
-      kw: Array<{ id: number; payload: MoviePayload; matches: number }>;
-      kwTotal: number;
-      sem: SearchHit[];
-      hyb: Array<SearchHit & { kwRank: number | null; semRank: number | null }>;
-    } | null;
-  } | null>(null);
+  const [latest, setLatest] = useState<LatestResult | null>(null);
+  /**
+   * DEGRADED MODE.
+   *
+   * The loop already refuses to stall, but on a dead cluster or dead venue
+   * wifi "never stall" just means hours of error flicker with nothing on the
+   * screen. So keep the last handful of results that genuinely came back, and
+   * after two failures in a row replay them with an honest badge while we
+   * keep probing underneath. The screen stays a demo; it just stops claiming
+   * the numbers are from this second.
+   */
+  const goodResultsRef = useRef<LatestResult[]>([]);
+  const failStreakRef = useRef(0);
+  const replayIdxRef = useRef(0);
+  const [replaying, setReplaying] = useState(false);
+  /** Every result that actually came back from the cluster lands here too. */
+  const commitResult = (r: LatestResult) => {
+    failStreakRef.current = 0;
+    setReplaying(false);
+    const cache = goodResultsRef.current;
+    if (!cache.some((c) => c.text === r.text)) {
+      cache.push(r);
+      if (cache.length > 8) cache.shift();
+    }
+    setLatest(r);
+  };
 
   // Manual override wins; otherwise ef auto-cycles so the booth varies itself.
   const [efOverride, setEfOverride] = useState<number | null>(null);
@@ -300,7 +388,7 @@ export function HNSWLive() {
   const [genreFilter, setGenreFilter] = useState<string | null>(null);
   const [exactMode, setExactMode] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
-  const [consoleOpen, setConsoleOpen] = useState(true);
+  const [consoleOpen, setConsoleOpen] = useState(false); // see `started`: the booth opens running, not configuring
   const [compareKeyword, setCompareKeyword] = useState(false);
   const [rerankMode, setRerankMode] = useState(false);
   const [hybridMode, setHybridMode] = useState(false);
@@ -382,7 +470,7 @@ export function HNSWLive() {
       } catch { /* quiet */ }
     };
     f();
-    const t = setInterval(f, 6000);
+    const t = setInterval(f, 15000); // cluster stats barely move; 6s was 600 calls an hour for nothing
     return () => clearInterval(t);
   }, []);
 
@@ -445,6 +533,18 @@ export function HNSWLive() {
     // skip to the next query.
     const recover = (msg: string) => {
       if (cancelled) return;
+      failStreakRef.current += 1;
+      const cache = goodResultsRef.current;
+      if (failStreakRef.current >= 2 && cache.length > 0) {
+        // Replay something real rather than showing a stranger an error.
+        const pick = cache[replayIdxRef.current % cache.length];
+        replayIdxRef.current += 1;
+        setReplaying(true);
+        setError(null);
+        setLatest(pick);
+        setPhase("results");
+        return;
+      }
       setError(msg);
       setTimeout(() => { if (!cancelled) setPhase("clearing"); }, 1600);
     };
@@ -483,7 +583,7 @@ export function HNSWLive() {
               bornAt: performance.now(),
             };
           }
-          setLatest({
+          commitResult({
             text: current.text, hits: hyb,
             clientMs: Math.round(took), serverMs: d.serverTimeMs ?? 0,
             ef: currentEf, nodesVisited: Math.round(currentEf * 2),
@@ -584,7 +684,7 @@ export function HNSWLive() {
         const nodesVisited = exactMode
           ? movies.length
           : Math.round(currentEf * 2 + Math.random() * currentEf * 0.5);
-        setLatest({
+        commitResult({
           text: current.text,
           hits,
           clientMs: Math.round(took),
@@ -806,37 +906,37 @@ export function HNSWLive() {
     <div className="relative z-10 flex h-screen w-screen flex-col overflow-hidden select-none">
       <KioskGuard />
       {/* HEADER */}
-      <header className="relative flex items-center justify-between border-b border-white/[0.05] px-10 pt-6 pb-5">
-        <div className="flex items-center gap-4">
-          <QdrantLogo className="h-7" />
-          <span className="h-8 w-px bg-white/10" />
-          <div className="leading-tight">
-            <div className="text-xl font-semibold tracking-tight-brand text-fg-primary">Semantic search, live.</div>
-            {/* The tabs are absolutely centered, so this line must not grow into
-                them. Kept short, and capped as insurance on narrow screens. */}
-            <div className="max-w-[42vw] truncate text-[11px] text-fg-secondary">
+      {/* HEADER — laid out as three flex columns rather than an absolutely
+          centred tab group. At booth scale the title grew straight under the
+          centred tabs; now the three blocks simply cannot overlap. */}
+      <header className="relative flex items-center gap-6 border-b border-white/[0.05] px-10 pt-6 pb-5">
+        <div className="flex min-w-0 flex-[2] items-center gap-4">
+          <QdrantLogo className="h-7 shrink-0" />
+          <span className="h-8 w-px shrink-0 bg-white/10" />
+          <div className="min-w-0 leading-tight">
+            <div className="truncate text-xl font-semibold tracking-tight-brand text-fg-primary">Semantic search, live.</div>
+            <div className="truncate text-[0.6875rem] text-fg-secondary">
               {movies.length > 0
                 ? `${movies.length.toLocaleString()} movies on one live cluster`
                 : "one live cluster"}
             </div>
           </div>
         </div>
-        {/* Tabs — pinned to true center regardless of side content */}
-        <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 mt-1 flex items-center gap-1 rounded-md bg-white/[0.04] ring-1 ring-white/[0.06] p-1">
+        <div className="flex shrink-0 items-center gap-1 rounded-md bg-white/[0.04] ring-1 ring-white/[0.06] p-1">
           <TabButton active={tab === "demo"} onClick={() => setTab("demo")}>Live demo</TabButton>
           <TabButton active={tab === "compare"} onClick={() => setTab("compare")}>Compare</TabButton>
           <TabButton active={tab === "inside"} onClick={() => setTab("inside")}>Under the hood</TabButton>
         </div>
-        <div className="flex items-center gap-2 text-xs text-fg-secondary/70">
+        <div className="flex min-w-0 flex-1 items-center justify-end gap-2 text-xs text-fg-secondary/70">
           <span className="inline-block h-1.5 w-1.5 rounded-full bg-qdrant-red animate-pulse" />
-          {totalOps} live searches
+          <span className="whitespace-nowrap">{totalOps} live searches</span>
         </div>
       </header>
 
       {/* LIVE STATS STRIP — the numbers a booth visitor asks for, on every tab:
           what cluster, how big, which model, and how fast it has actually been
           this session. All values are live; nothing here is hardcoded copy. */}
-      <div className="flex items-center justify-center gap-x-6 gap-y-1 flex-wrap border-b border-white/[0.05] bg-white/[0.02] px-10 py-1.5 text-[11px] text-fg-secondary">
+      <div className="flex items-center justify-center gap-x-6 gap-y-1 flex-wrap border-b border-white/[0.05] bg-white/[0.02] px-10 py-1.5 text-[0.6875rem] text-fg-secondary">
         <span className="flex items-center gap-1.5">
           <span
             className={`inline-block h-1.5 w-1.5 rounded-full ${
@@ -895,13 +995,13 @@ export function HNSWLive() {
             >
               {hoverHit.hit.payload.poster && (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img src={hoverHit.hit.payload.poster} alt="" className="h-12 w-9 rounded-md object-cover" />
+                <img src={posterSrc(hoverHit.hit.payload.poster)} alt="" className="h-12 w-9 rounded-md object-cover" />
               )}
               <div>
-                <div className="text-[12px] font-semibold text-fg-primary whitespace-nowrap">
+                <div className="text-[0.75rem] font-semibold text-fg-primary whitespace-nowrap">
                   {hoverHit.hit.payload.title}
                 </div>
-                <div className="text-[10px] text-fg-secondary whitespace-nowrap">
+                <div className="text-[0.625rem] text-fg-secondary whitespace-nowrap">
                   {hoverHit.hit.payload.year} · match {Math.round(hoverHit.hit.score * 100)}% · click for details
                 </div>
               </div>
@@ -913,10 +1013,24 @@ export function HNSWLive() {
             <StepRail phase={phase} />
           </div>
 
-          {/* SEARCH BAR — visitors type their own query */}
+          {/* DEGRADED BADGE — if the venue wifi or the cluster drops, say so
+              rather than passing a cached result off as a live one. */}
+          {replaying && (
+            <div className="absolute top-5 left-5 z-30 flex items-center gap-2 rounded-md bg-amber-400/10 px-4 py-2 ring-1 ring-amber-400/40">
+              <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-amber-400" />
+              <span className="text-[0.75rem] text-fg-primary/90">
+                Reconnecting. Replaying the last live results.
+              </span>
+            </div>
+          )}
+
+          {/* SEARCH BAR — only for a human who is actually driving the screen.
+              Unattended there is no keyboard, and this bar sat directly on top
+              of result cards 2 through 5 every single cycle. */}
+          {!rotating && (
           <form
             onSubmit={submitCustom}
-            className="absolute bottom-5 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 rounded-md card-glass-strong pl-5 pr-1.5 py-1.5 w-[420px] ring-1 ring-white/[0.06] transition-shadow focus-within:ring-qdrant-red/50"
+            className="absolute bottom-5 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 rounded-md card-glass-strong pl-5 pr-1.5 py-1.5 w-[26.25rem] ring-1 ring-white/[0.06] transition-shadow focus-within:ring-qdrant-red/50"
           >
             <input
               value={searchInput}
@@ -939,18 +1053,19 @@ export function HNSWLive() {
               {embedState === "loading" ? "…" : "Search"}
             </button>
           </form>
+          )}
 
           {/* PHONE QR — click to blow it up for people walking by */}
           {remoteQrUrl && !consoleOpen && (
             <button
               onClick={() => setQrExpanded(true)}
-              className="absolute bottom-5 right-5 z-10 flex items-center gap-3 rounded-lg card-glass-strong px-3 py-2.5 text-left transition-all hover:ring-1 hover:ring-white/20"
+              className="absolute top-5 right-5 z-10 flex items-center gap-3 rounded-lg card-glass-strong px-3 py-2.5 text-left transition-all hover:ring-1 hover:ring-white/20"
             >
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={remoteQrUrl} alt="Scan to search from your phone" className="h-16 w-16" />
               <div className="leading-snug">
-                <div className="text-[11px] font-medium text-fg-primary">Search from<br />your phone</div>
-                <div className="mt-0.5 text-[9px] text-fg-secondary">
+                <div className="text-[0.6875rem] font-medium text-fg-primary">Search from<br />your phone</div>
+                <div className="mt-0.5 text-[0.5625rem] text-fg-secondary">
                   {remoteWaiting > 0 ? `${remoteWaiting} in queue` : "tap to enlarge"}
                 </div>
               </div>
@@ -978,20 +1093,21 @@ export function HNSWLive() {
                 <img
                   src={remoteQrBig}
                   alt="Scan to search from your phone"
-                  className="h-[340px] w-[340px] rounded-lg bg-white/[0.03] ring-1 ring-white/[0.08] p-4"
+                  className="h-[21.25rem] w-[21.25rem] rounded-lg bg-white/[0.03] ring-1 ring-white/[0.08] p-4"
                 />
                 {remoteWaiting > 0 && (
-                  <div className="mt-5 rounded bg-qdrant-red/15 ring-1 ring-qdrant-red/30 px-3 py-1 text-[12px] text-qdrant-red">
+                  <div className="mt-5 rounded bg-qdrant-red/15 ring-1 ring-qdrant-red/30 px-3 py-1 text-[0.75rem] text-qdrant-red">
                     {remoteWaiting} search{remoteWaiting === 1 ? "" : "es"} in queue, running in order
                   </div>
                 )}
-                <div className="mt-6 text-[11px] text-fg-secondary/60">tap anywhere to close</div>
+                <div className="mt-6 text-[0.6875rem] text-fg-secondary/60">tap anywhere to close</div>
               </motion.button>
             )}
           </AnimatePresence>
 
-          {/* SETTINGS PILL — reopens the centered setup card */}
-          {!consoleOpen && (
+          {/* SETTINGS PILL — reopens the centered setup card. Hidden while the
+              screen runs itself; it overlapped result card #1. */}
+          {!consoleOpen && !rotating && (
             <button
               onClick={() => setConsoleOpen(true)}
               className="absolute bottom-5 left-5 z-10 rounded-md card-glass-strong px-4 py-2 text-xs font-medium text-fg-secondary hover:text-fg-primary transition-colors"
@@ -1014,10 +1130,10 @@ export function HNSWLive() {
                   initial={{ y: 14, opacity: 0 }}
                   animate={{ y: 0, opacity: 1 }}
                   exit={{ y: 10, opacity: 0 }}
-                  className="flex w-[420px] max-h-[62vh] flex-col rounded-lg card-glass-strong p-6"
+                  className="flex w-[26.25rem] max-h-[62vh] flex-col rounded-lg card-glass-strong p-6"
                 >
                   <div className="text-xl font-semibold tracking-tight-brand text-fg-primary">Set it up.</div>
-                  <div className="mt-0.5 mb-4 text-[13px] text-fg-secondary">Every choice applies to the next search.</div>
+                  <div className="mt-0.5 mb-4 text-[0.8125rem] text-fg-secondary">Every choice applies to the next search.</div>
                   <div className="flex-1 min-h-0 overflow-y-auto pr-2 -mr-2 space-y-3.5">
                     <SetupRow label="Re-rank (cross-encoder)">
                       <EfPill active={!rerankMode} onClick={() => setRerankMode(false)}>Off</EfPill>
@@ -1105,15 +1221,17 @@ export function HNSWLive() {
             )}
           </AnimatePresence>
 
-          {/* DETAILS TOGGLE — request/response review */}
+          {/* DETAILS TOGGLE — request/response review, for whoever is driving */}
+          {!rotating && (
           <button
             onClick={() => setShowDetails((s) => !s)}
-            className={`absolute top-5 right-5 z-10 rounded-md px-4 py-1.5 text-xs font-medium transition-all ${
+            className={`absolute bottom-5 right-5 z-30 rounded-md px-4 py-1.5 text-xs font-medium transition-all ${
               showDetails ? "bg-fg-primary text-bg-base" : "card-glass-strong text-fg-secondary hover:text-fg-primary"
             }`}
           >
             {showDetails ? "Hide details" : "Show details"}
           </button>
+          )}
 
           {/* DETAILS PANEL — the real request + response for review */}
           <AnimatePresence>
@@ -1123,10 +1241,10 @@ export function HNSWLive() {
                 initial={{ opacity: 0, x: 24 }}
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0, x: 24 }}
-                className="absolute right-5 top-16 bottom-5 z-10 w-[330px] rounded-lg card-glass-strong p-4 overflow-y-auto"
+                className="absolute right-5 top-16 bottom-5 z-10 w-[20.625rem] rounded-lg card-glass-strong p-4 overflow-y-auto"
               >
                 <div className="eyebrow mb-2">Request · POST /points/search</div>
-                <pre className="rounded-lg bg-black/35 p-3 text-[10.5px] leading-relaxed text-fg-primary/90 font-mono whitespace-pre-wrap">
+                <pre className="rounded-lg bg-black/35 p-3 text-[0.6562rem] leading-relaxed text-fg-primary/90 font-mono whitespace-pre-wrap">
 {`{
   "vector": [${latest.hits.length ? "…384 floats…" : ""}],
   "limit": ${latest.limit},
@@ -1143,13 +1261,13 @@ export function HNSWLive() {
                 <div className="eyebrow mt-4 mb-2">Response · {latest.serverMs} ms in-engine</div>
                 <div className="space-y-1">
                   {latest.hits.map((h, i) => (
-                    <div key={h.id} className="flex items-center justify-between rounded-lg bg-black/25 px-2.5 py-1.5 text-[11px]">
+                    <div key={h.id} className="flex items-center justify-between rounded-lg bg-black/25 px-2.5 py-1.5 text-[0.6875rem]">
                       <span className="truncate text-fg-primary/90">#{i + 1} {h.payload.title}</span>
                       <span className="shrink-0 ml-2 font-mono text-fg-secondary">{h.score.toFixed(4)}</span>
                     </div>
                   ))}
                 </div>
-                <div className="mt-4 text-[11px] leading-relaxed text-fg-secondary">
+                <div className="mt-4 text-[0.6875rem] leading-relaxed text-fg-secondary">
                   {latest.exact
                     ? `Exact scan compared the query against all ${movies.length.toLocaleString()} vectors — no index.`
                     : `HNSW touched ~${latest.nodesVisited.toLocaleString()} of ${movies.length.toLocaleString()} vectors (${((latest.nodesVisited / Math.max(movies.length, 1)) * 100).toFixed(1)}%).`}
@@ -1212,12 +1330,12 @@ export function HNSWLive() {
                 >
                   <DistanceViz metric={distanceSel} />
                   <div className="text-left max-w-[30ch]">
-                    <div className="text-[13px] font-medium text-fg-primary">
+                    <div className="text-[0.8125rem] font-medium text-fg-primary">
                       {distanceSel === "cosine" && "Cosine, comparing direction"}
                       {distanceSel === "dot" && "Dot product, direction and length"}
                       {distanceSel === "euclid" && "Euclidean, straight-line distance"}
                     </div>
-                    <div className="mt-0.5 text-[11px] leading-relaxed text-fg-secondary">
+                    <div className="mt-0.5 text-[0.6875rem] leading-relaxed text-fg-secondary">
                       {distanceSel === "cosine" && "Two vectors match when they point the same way. The angle is the score."}
                       {distanceSel === "dot" && "Like cosine, but longer vectors score higher too."}
                       {distanceSel === "euclid" && "Two vectors match when their points sit close together in space."}
@@ -1269,10 +1387,10 @@ export function HNSWLive() {
                 initial={{ opacity: 0, y: -8 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -6 }}
-                className="absolute top-[72px] left-0 right-0 z-10 flex flex-col items-center pointer-events-none"
+                className="absolute top-[4.5rem] left-0 right-0 z-10 flex flex-col items-center pointer-events-none"
               >
                 <div className="max-w-[80%] rounded-md card-glass-strong px-8 py-3.5 text-center">
-                  <div className="text-[12px] text-fg-secondary mb-0.5">
+                  <div className="text-[0.75rem] text-fg-secondary mb-0.5">
                     {customSource === "phone" ? "Someone asked" : "You asked"}
                   </div>
                   <div className="text-2xl font-semibold tracking-tight-brand text-fg-primary leading-snug">
@@ -1301,7 +1419,7 @@ export function HNSWLive() {
                       <div className={`text-3xl font-semibold tracking-tight-brand ${latest.keywordCount === 0 ? "text-fg-secondary" : "text-fg-primary"}`}>
                         {latest.keywordCount.toLocaleString()}
                       </div>
-                      <div className="text-[10px] text-fg-secondary">
+                      <div className="text-[0.625rem] text-fg-secondary">
                         {latest.keywordCount === 0
                           ? "those words never appear"
                           : "documents contain these words"}
@@ -1313,14 +1431,17 @@ export function HNSWLive() {
                       <div className="text-3xl font-semibold tracking-tight-brand text-qdrant-red">
                         {latest.hits.length}
                       </div>
-                      <div className="text-[10px] text-fg-secondary">same query, same data</div>
+                      <div className="text-[0.625rem] text-fg-secondary">same query, same data</div>
                     </div>
                   </div>
                 )}
                 <div className="mb-4 flex items-end justify-between px-1">
                   <div>
                     <div className="eyebrow mb-1">&ldquo;{latest.text}&rdquo;</div>
-                    <div className="text-2xl font-semibold tracking-tight-brand text-fg-primary">
+                    <div
+                      className="font-semibold tracking-tight-brand text-fg-primary leading-none"
+                      style={{ fontSize: "clamp(1.8rem, 3.1vw, 3rem)" }}
+                    >
                       {latest.hits.length} answers.{" "}
                       <span className="text-qdrant-red">{latest.serverMs < 1 ? "<1" : Math.round(latest.serverMs)} ms.</span>
                     </div>
@@ -1342,7 +1463,7 @@ export function HNSWLive() {
                 {/* BEFORE strip — pure vector-search order, for comparison */}
                 {latest.reranked && (
                   <div className="mb-2">
-                    <div className="mb-1.5 text-[10px] tracking-wide text-fg-secondary/70">
+                    <div className="mb-1.5 text-[0.625rem] tracking-wide text-fg-secondary/70">
                       Before, vector search order
                     </div>
                     <div
@@ -1357,9 +1478,9 @@ export function HNSWLive() {
                             key={`orig-${h.id}`}
                             className="flex items-center gap-2 rounded-lg bg-white/[0.04] ring-1 ring-white/[0.06] px-2 py-1.5 opacity-75"
                           >
-                            <span className="shrink-0 font-mono text-[10px] text-fg-secondary">#{i + 1}</span>
-                            <span className="min-w-0 truncate text-[11px] text-fg-primary/85">{h.payload.title}</span>
-                            <span className="ml-auto shrink-0 text-[10px] font-medium">
+                            <span className="shrink-0 font-mono text-[0.625rem] text-fg-secondary">#{i + 1}</span>
+                            <span className="min-w-0 truncate text-[0.6875rem] text-fg-primary/85">{h.payload.title}</span>
+                            <span className="ml-auto shrink-0 text-[0.625rem] font-medium">
                               {newPos === -1 ? (
                                 <span className="text-fg-secondary/60">out</span>
                               ) : newPos < i ? (
@@ -1374,7 +1495,7 @@ export function HNSWLive() {
                         );
                       })}
                     </div>
-                    <div className="mt-2 mb-1.5 text-[10px] tracking-wide text-fg-secondary/70">
+                    <div className="mt-2 mb-1.5 text-[0.625rem] tracking-wide text-fg-secondary/70">
                       After, cross-encoder re-rank
                     </div>
                   </div>
@@ -1415,7 +1536,7 @@ export function HNSWLive() {
 
       {/* ─── UNDER THE HOOD TAB ─── */}
       <main className={`flex-1 min-h-0 px-10 pb-8 overflow-y-auto ${tab === "inside" ? "block" : "hidden"}`}>
-        <div className="max-w-[1200px] mx-auto">
+        <div className="max-w-[75rem] mx-auto">
           <h2 className="mt-2 mb-1 text-3xl font-semibold tracking-tight-brand text-fg-primary">
             What just happened, exactly.
           </h2>
@@ -1491,7 +1612,7 @@ export function HNSWLive() {
                     const avg = Math.round(arr.reduce((s, v) => s + v, 0) / arr.length);
                     const max = Math.max(...Object.values(modeStatsRef.current).map((a2) => a2.reduce((s, v) => s + v, 0) / a2.length));
                     return (
-                      <div key={mode} className="flex items-center gap-3 text-[12px]">
+                      <div key={mode} className="flex items-center gap-3 text-[0.75rem]">
                         <span className="w-28 shrink-0 text-fg-primary/85">{mode}</span>
                         <span className="h-1.5 flex-1 rounded-full bg-white/[0.05] overflow-hidden">
                           <span
@@ -1504,7 +1625,7 @@ export function HNSWLive() {
                     );
                   })}
                 {Object.keys(modeStatsRef.current).length === 0 && (
-                  <div className="text-[12px] text-fg-secondary">Speed by mode fills in as the loop runs.</div>
+                  <div className="text-[0.75rem] text-fg-secondary">Speed by mode fills in as the loop runs.</div>
                 )}
               </div>
             </InsideCard>
@@ -1537,8 +1658,8 @@ export function HNSWLive() {
                 ) : (
                   <div className="h-36 w-36 rounded-lg bg-white/[0.03] ring-1 ring-white/[0.06]" />
                 )}
-                <div className="text-[13px] leading-relaxed text-fg-secondary">
-                  <div className="font-mono text-fg-primary/90 text-[12px] break-all">{REPO_URL}</div>
+                <div className="text-[0.8125rem] leading-relaxed text-fg-secondary">
+                  <div className="font-mono text-fg-primary/90 text-[0.75rem] break-all">{REPO_URL}</div>
                   <div className="mt-2">Next.js, one Python ingest script, Qdrant Cloud free tier.</div>
                 </div>
               </div>
@@ -1551,7 +1672,7 @@ export function HNSWLive() {
               <div className="mt-3 space-y-1.5">
                 {log.length === 0 && <div className="text-sm text-fg-secondary">Warming up…</div>}
                 {log.map((e) => (
-                  <div key={e.id} className="flex items-center gap-3 rounded-lg bg-white/[0.03] ring-1 ring-white/[0.05] px-2.5 py-1.5 text-[13px]">
+                  <div key={e.id} className="flex items-center gap-3 rounded-lg bg-white/[0.03] ring-1 ring-white/[0.05] px-2.5 py-1.5 text-[0.8125rem]">
                     <span
                       aria-hidden
                       className="h-9 w-7 shrink-0 rounded-md"
@@ -1559,7 +1680,7 @@ export function HNSWLive() {
                     />
                     <span className="min-w-0">
                       <span className="block truncate text-fg-primary/90">&ldquo;{e.text}&rdquo;</span>
-                      <span className="block truncate text-[11px] text-fg-secondary">top match {e.topTitle}</span>
+                      <span className="block truncate text-[0.6875rem] text-fg-secondary">top match {e.topTitle}</span>
                     </span>
                     <span className="shrink-0 ml-auto text-fg-secondary">{e.latencyMs} ms</span>
                   </div>
@@ -1586,11 +1707,11 @@ export function HNSWLive() {
               animate={{ y: 0, scale: 1 }}
               exit={{ y: 10, scale: 0.98 }}
               onClick={(e) => e.stopPropagation()}
-              className="flex w-[720px] max-h-[80vh] gap-6 rounded-lg card-glass-strong p-6 overflow-hidden"
+              className="flex w-[45rem] max-h-[80vh] gap-6 rounded-lg card-glass-strong p-6 overflow-hidden"
             >
               {/* Poster art */}
               <div
-                className="relative w-[220px] shrink-0 self-stretch min-h-[320px] overflow-hidden rounded-lg"
+                className="relative w-[13.75rem] shrink-0 self-stretch min-h-[20rem] overflow-hidden rounded-lg"
                 style={{
                   background: `linear-gradient(150deg, hsl(${selected.payload.hue ?? 220},62%,34%) 0%, hsl(${((selected.payload.hue ?? 220) + 35) % 360},52%,12%) 100%)`,
                 }}
@@ -1598,11 +1719,11 @@ export function HNSWLive() {
                 <div aria-hidden className="absolute inset-0" style={{ background: `radial-gradient(circle at 25% 18%, hsla(${selected.payload.hue ?? 220},85%,72%,0.4) 0%, transparent 55%)` }} />
                 {selected.payload.poster && (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img src={selected.payload.poster} alt="" className="absolute inset-0 h-full w-full object-cover" />
+                  <img src={posterSrc(selected.payload.poster)} alt="" className="absolute inset-0 h-full w-full object-cover" />
                 )}
                 <div className="absolute inset-x-0 bottom-0 p-4" style={{ background: "linear-gradient(to top, rgba(11,15,25,0.9), transparent)" }}>
                   <div className="text-lg font-semibold leading-tight tracking-tight-brand text-white">{selected.payload.title}</div>
-                  <div className="mt-1 text-[11px] text-white/70">{selected.payload.year}</div>
+                  <div className="mt-1 text-[0.6875rem] text-white/70">{selected.payload.year}</div>
                 </div>
               </div>
 
@@ -1612,11 +1733,11 @@ export function HNSWLive() {
                   <div>
                     <div className="text-2xl font-semibold tracking-tight-brand text-fg-primary">{selected.payload.title}</div>
                     <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                      <span className="text-[12px] text-fg-secondary mr-1">{selected.payload.year}</span>
+                      <span className="text-[0.75rem] text-fg-secondary mr-1">{selected.payload.year}</span>
                       {selected.payload.genres.map((g) => (
-                        <span key={g} className="rounded bg-white/[0.05] ring-1 ring-white/[0.08] px-2 py-0.5 text-[10px] text-fg-primary/85">{g}</span>
+                        <span key={g} className="rounded bg-white/[0.05] ring-1 ring-white/[0.08] px-2 py-0.5 text-[0.625rem] text-fg-primary/85">{g}</span>
                       ))}
-                      <span className="rounded bg-qdrant-red/15 ring-1 ring-qdrant-red/30 px-2 py-0.5 text-[10px] text-qdrant-red">
+                      <span className="rounded bg-qdrant-red/15 ring-1 ring-qdrant-red/30 px-2 py-0.5 text-[0.625rem] text-qdrant-red">
                         match {Math.round(selected.score * 100)}%
                       </span>
                     </div>
@@ -1629,7 +1750,7 @@ export function HNSWLive() {
                   </button>
                 </div>
 
-                <p className="mt-4 flex-1 min-h-0 overflow-y-auto pr-1 text-[13.5px] leading-relaxed text-fg-primary/85">
+                <p className="mt-4 flex-1 min-h-0 overflow-y-auto pr-1 text-[0.8438rem] leading-relaxed text-fg-primary/85">
                   {selected.payload.description}
                 </p>
 
@@ -1638,21 +1759,21 @@ export function HNSWLive() {
                   <div className="grid grid-cols-4 gap-2">
                     {(similar.length ? similar : Array.from({ length: 4 }).map(() => null)).map((s, i) =>
                       s == null ? (
-                        <div key={`sk-${i}`} className="h-[64px] rounded-lg bg-white/[0.03] ring-1 ring-white/[0.05] animate-pulse" />
+                        <div key={`sk-${i}`} className="h-[4rem] rounded-lg bg-white/[0.03] ring-1 ring-white/[0.05] animate-pulse" />
                       ) : (
                         <button
                           key={s.id}
                           onClick={() => openDetail(s)}
-                          className="relative h-[64px] overflow-hidden rounded-lg text-left ring-1 ring-transparent transition-all hover:ring-white/40"
+                          className="relative h-[4rem] overflow-hidden rounded-lg text-left ring-1 ring-transparent transition-all hover:ring-white/40"
                           style={{ background: `linear-gradient(140deg, hsl(${s.payload.hue ?? 220},58%,30%), hsl(${((s.payload.hue ?? 220) + 30) % 360},48%,12%))` }}
                         >
                           {s.payload.poster && (
                             // eslint-disable-next-line @next/next/no-img-element
-                            <img src={s.payload.poster} alt="" className="absolute inset-0 h-full w-full object-cover" loading="lazy" />
+                            <img src={posterSrc(s.payload.poster)} alt="" className="absolute inset-0 h-full w-full object-cover" loading="lazy" />
                           )}
                           <div className="absolute inset-x-0 bottom-0 p-1.5" style={{ background: "linear-gradient(to top, rgba(11,15,25,0.9), transparent)" }}>
-                            <div className="truncate text-[10.5px] font-semibold text-white">{s.payload.title}</div>
-                            <div className="text-[9px] text-white/65">{s.payload.year}</div>
+                            <div className="truncate text-[0.6562rem] font-semibold text-white">{s.payload.title}</div>
+                            <div className="text-[0.5625rem] text-white/65">{s.payload.year}</div>
                           </div>
                         </button>
                       ),
@@ -1666,8 +1787,11 @@ export function HNSWLive() {
       </AnimatePresence>
 
       {/* FOOTER */}
-      <footer className="flex items-center justify-between border-t border-white/[0.05] px-10 py-3 text-[11px] text-fg-secondary/60">
+      <footer className="flex items-center justify-between border-t border-white/[0.05] px-10 py-3 text-[0.6875rem] text-fg-secondary/60">
         <span className="font-mono">POST /collections/movies/points/search</span>
+        {/* Every number on this screen is real. The drawing is not the graph,
+            and someone in the crowd will know that — say it first. */}
+        <span>Latencies and results are live. The map is a 2-D projection and the drawn path illustrates the walk.</span>
         <span>qdrant.tech/cloud</span>
       </footer>
     </div>
@@ -1715,7 +1839,7 @@ function KioskGuard() {
   return (
     <button
       onClick={() => document.documentElement.requestFullscreen().catch(() => {})}
-      className="fixed bottom-3 right-3 z-40 rounded-md card-glass-strong px-3 py-1.5 text-[11px] text-fg-secondary hover:text-fg-primary transition-colors"
+      className="fixed bottom-3 right-3 z-40 rounded-md card-glass-strong px-3 py-1.5 text-[0.6875rem] text-fg-secondary hover:text-fg-primary transition-colors"
     >
       Fullscreen
     </button>
@@ -1749,24 +1873,24 @@ function HybridCompare({
         className="h-8 w-6 shrink-0 rounded-sm bg-cover bg-center"
         style={{
           background: payload.poster
-            ? `url(${payload.poster}) center/cover`
+            ? `url(${posterSrc(payload.poster)}) center/cover`
             : `linear-gradient(140deg, hsl(${payload.hue ?? 220},58%,32%), hsl(${((payload.hue ?? 220) + 30) % 360},48%,14%))`,
         }}
       />
-      <span className="min-w-0 flex-1 truncate text-[11.5px] text-fg-primary/90">{payload.title}</span>
-      <span className="shrink-0 text-[10px] text-fg-secondary">{right}</span>
+      <span className="min-w-0 flex-1 truncate text-[0.7188rem] text-fg-primary/90">{payload.title}</span>
+      <span className="shrink-0 text-[0.625rem] text-fg-secondary">{right}</span>
     </button>
   );
 
   return (
     <div className="grid grid-cols-3 gap-3">
       <div>
-        <div className="mb-1.5 text-[10px] tracking-wide text-fg-secondary/70">
+        <div className="mb-1.5 text-[0.625rem] tracking-wide text-fg-secondary/70">
           Keyword · {data.kwTotal === 0 ? "no exact matches" : `${data.kwTotal} matched`}
         </div>
         <div className="space-y-1">
           {data.kw.length === 0 && (
-            <div className="rounded bg-white/[0.03] ring-1 ring-white/[0.05] px-2 py-3 text-center text-[11px] text-fg-secondary">
+            <div className="rounded bg-white/[0.03] ring-1 ring-white/[0.05] px-2 py-3 text-center text-[0.6875rem] text-fg-secondary">
               those words never appear
             </div>
           )}
@@ -1776,7 +1900,7 @@ function HybridCompare({
         </div>
       </div>
       <div>
-        <div className="mb-1.5 text-[10px] tracking-wide text-fg-secondary/70">Semantic · dense vectors</div>
+        <div className="mb-1.5 text-[0.625rem] tracking-wide text-fg-secondary/70">Semantic · dense vectors</div>
         <div className="space-y-1">
           {data.sem.map((s) => (
             <Row key={`s-${s.id}`} payload={s.payload} right={`${Math.round(s.score * 100)}%`} onClick={() => onOpen(s)} />
@@ -1784,7 +1908,7 @@ function HybridCompare({
         </div>
       </div>
       <div>
-        <div className="mb-1.5 text-[10px] tracking-wide text-qdrant-red">Hybrid · RRF fusion</div>
+        <div className="mb-1.5 text-[0.625rem] tracking-wide text-qdrant-red">Hybrid · RRF fusion</div>
         <div className="space-y-1">
           {data.hyb.map((h) => (
             <Row
@@ -1807,7 +1931,7 @@ function GenreBars({ counts }: { counts: Array<{ genre: string; count: number }>
   return (
     <div className="mt-3 space-y-1.5">
       {top.map(({ genre, count }) => (
-        <div key={genre} className="flex items-center gap-2 text-[11px]">
+        <div key={genre} className="flex items-center gap-2 text-[0.6875rem]">
           <span className="w-24 shrink-0 truncate text-fg-primary/85">{genre}</span>
           <span className="h-2.5 flex-1 rounded-sm bg-white/[0.04] overflow-hidden">
             <span
@@ -1825,7 +1949,7 @@ function GenreBars({ counts }: { counts: Array<{ genre: string; count: number }>
 /** Latency histogram over this session's searches. */
 function LatencyHistogram({ lats }: { lats: number[] }) {
   if (lats.length < 3) {
-    return <div className="mt-3 text-[12px] text-fg-secondary">Histogram fills in as searches run.</div>;
+    return <div className="mt-3 text-[0.75rem] text-fg-secondary">Histogram fills in as searches run.</div>;
   }
   const min = Math.min(...lats);
   const max = Math.max(...lats, min + 1);
@@ -1846,7 +1970,7 @@ function LatencyHistogram({ lats }: { lats: number[] }) {
           />
         ))}
       </div>
-      <div className="mt-1 flex justify-between text-[10px] text-fg-secondary/70">
+      <div className="mt-1 flex justify-between text-[0.625rem] text-fg-secondary/70">
         <span>{Math.round(min)} ms</span>
         <span>round-trip latency distribution</span>
         <span>{Math.round(max)} ms</span>
@@ -1864,7 +1988,7 @@ function EfCurve({ modeStats }: { modeStats: Record<string, number[]> }) {
     })
     .filter((p): p is { ef: number; ms: number } => p != null);
   if (pts.length < 2) {
-    return <div className="mt-3 text-[12px] text-fg-secondary">The ef curve draws itself as the loop cycles ef values.</div>;
+    return <div className="mt-3 text-[0.75rem] text-fg-secondary">The ef curve draws itself as the loop cycles ef values.</div>;
   }
   const W = 260, H = 90, PAD = 24;
   const xs = [16, 64, 128, 512];
@@ -1885,7 +2009,7 @@ function EfCurve({ modeStats }: { modeStats: Record<string, number[]> }) {
           </g>
         ))}
       </svg>
-      <div className="text-[10px] text-fg-secondary/70 text-center">measured this session, higher ef = more candidates checked</div>
+      <div className="text-[0.625rem] text-fg-secondary/70 text-center">measured this session, higher ef = more candidates checked</div>
     </div>
   );
 }
@@ -1954,16 +2078,16 @@ hits = client.search(
   };
   return (
     <div className="mt-3 flex items-center gap-2">
-      <span className="text-[10px] tracking-wide text-fg-secondary/70">Take it home:</span>
+      <span className="text-[0.625rem] tracking-wide text-fg-secondary/70">Take it home:</span>
       <button
         onClick={() => copy("py", py)}
-        className="rounded bg-white/[0.05] ring-1 ring-white/[0.08] px-2.5 py-1 text-[11px] text-fg-primary hover:bg-white/[0.08] transition-colors"
+        className="rounded bg-white/[0.05] ring-1 ring-white/[0.08] px-2.5 py-1 text-[0.6875rem] text-fg-primary hover:bg-white/[0.08] transition-colors"
       >
         {copied === "py" ? "Copied ✓" : "Copy Python"}
       </button>
       <button
         onClick={() => copy("ts", ts)}
-        className="rounded bg-white/[0.05] ring-1 ring-white/[0.08] px-2.5 py-1 text-[11px] text-fg-primary hover:bg-white/[0.08] transition-colors"
+        className="rounded bg-white/[0.05] ring-1 ring-white/[0.08] px-2.5 py-1 text-[0.6875rem] text-fg-primary hover:bg-white/[0.08] transition-colors"
       >
         {copied === "ts" ? "Copied ✓" : "Copy TypeScript"}
       </button>
@@ -2013,7 +2137,7 @@ function BurstTest({ queries }: { queries: Query[] }) {
       <button
         onClick={run}
         disabled={running}
-        className="w-full rounded-md bg-white/[0.05] ring-1 ring-white/[0.08] py-2 text-[12px] font-medium text-fg-primary hover:bg-white/[0.08] transition-colors disabled:opacity-50"
+        className="w-full rounded-md bg-white/[0.05] ring-1 ring-white/[0.08] py-2 text-[0.75rem] font-medium text-fg-primary hover:bg-white/[0.08] transition-colors disabled:opacity-50"
       >
         {running ? "20 searches in flight…" : "Burst: 20 parallel searches"}
       </button>
@@ -2029,7 +2153,7 @@ function BurstTest({ queries }: { queries: Query[] }) {
               />
             ))}
           </div>
-          <div className="mt-1.5 text-[11px] text-fg-secondary">
+          <div className="mt-1.5 text-[0.6875rem] text-fg-secondary">
             all 20 done in <span className="text-fg-primary">{result.wall} ms</span> wall,
             p50 <span className="text-fg-primary">{result.p50} ms</span>,
             p95 <span className="text-fg-primary">{result.p95} ms</span>
@@ -2069,7 +2193,7 @@ function StepRail({ phase }: { phase: Phase }) {
               {s.label}
             </span>
             {i < STEPS.length - 1 && (
-              <span className={`mx-0.5 text-[10px] ${done ? "text-fg-primary/60" : "text-fg-secondary/30"}`}>→</span>
+              <span className={`mx-0.5 text-[0.625rem] ${done ? "text-fg-primary/60" : "text-fg-secondary/30"}`}>→</span>
             )}
           </div>
         );
@@ -2081,7 +2205,7 @@ function StepRail({ phase }: { phase: Phase }) {
 function SetupRow({ label, children, wide = false }: { label: string; children: React.ReactNode; wide?: boolean }) {
   return (
     <div className={wide ? "col-span-2" : ""}>
-      <div className="mb-1.5 text-[11px] font-medium tracking-wide text-fg-secondary">{label}</div>
+      <div className="mb-1.5 text-[0.6875rem] font-medium tracking-wide text-fg-secondary">{label}</div>
       <div className="flex items-center gap-1 flex-wrap">{children}</div>
     </div>
   );
@@ -2091,7 +2215,7 @@ function EfPill({ active, onClick, children }: { active: boolean; onClick: () =>
   return (
     <button
       onClick={onClick}
-      className={`rounded px-2.5 py-[3px] text-[11px] font-medium transition-all ${
+      className={`rounded px-2.5 py-[3px] text-[0.6875rem] font-medium transition-all ${
         active ? "bg-qdrant-red text-white" : "bg-white/[0.05] text-fg-secondary hover:text-fg-primary"
       }`}
     >
@@ -2258,7 +2382,7 @@ function DistanceExplorer({ initial }: { initial: "cosine" | "dot" | "euclid" })
   }, []);
 
   return (
-    <div className="w-[560px] rounded-lg card-glass-strong p-6">
+    <div className="w-[35rem] rounded-lg card-glass-strong p-6">
       <div className="flex items-center justify-between">
         <div className="text-lg font-semibold tracking-tight-brand text-fg-primary">
           How similarity is measured
@@ -2277,13 +2401,13 @@ function DistanceExplorer({ initial }: { initial: "cosine" | "dot" | "euclid" })
           <span className="font-mono text-3xl font-semibold text-qdrant-red">
             {readout.label} = {readout.value.toFixed(2)}
           </span>
-          <div className="mt-1 text-[12px] text-fg-secondary">
+          <div className="mt-1 text-[0.75rem] text-fg-secondary">
             {metric === "cosine" && "Closer to 1 means the vectors point the same way."}
             {metric === "dot" && "Angle and length together. Watch the projection dot slide."}
             {metric === "euclid" && "Smaller distance means more similar. Watch d shrink and grow."}
           </div>
         </div>
-        <div className="text-[11px] text-fg-secondary/60">move the mouse away to close</div>
+        <div className="text-[0.6875rem] text-fg-secondary/60">move the mouse away to close</div>
       </div>
     </div>
   );
@@ -2306,7 +2430,7 @@ function VectorStrip({ vector }: { vector: number[] }) {
   const [hover, setHover] = useState<number | null>(null);
 
   return (
-    <div className="flex h-16 w-full max-w-[720px] gap-[3px] items-end cursor-crosshair">
+    <div className="flex h-16 w-full max-w-[45rem] gap-[3px] items-end cursor-crosshair">
       {cells.map(({ dim, v }, i) => {
         const t = Math.max(0, Math.min(1, (v + 0.25) * 2)); // roughly normalize
         const isHover = hover === i;
@@ -2328,8 +2452,8 @@ function VectorStrip({ vector }: { vector: number[] }) {
           >
             {isHover && (
               <div className="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 -translate-x-1/2 whitespace-nowrap rounded-md card-glass-strong px-3 py-1.5 text-center">
-                <div className="font-mono text-[13px] text-fg-primary">{v.toFixed(4)}</div>
-                <div className="text-[10px] text-fg-secondary">dimension {dim} of 384</div>
+                <div className="font-mono text-[0.8125rem] text-fg-primary">{v.toFixed(4)}</div>
+                <div className="text-[0.625rem] text-fg-secondary">dimension {dim} of 384</div>
               </div>
             )}
           </motion.div>
@@ -2343,7 +2467,7 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
   return (
     <button
       onClick={onClick}
-      className={`rounded px-5 py-1.5 text-sm font-medium transition-all ${
+      className={`whitespace-nowrap rounded px-3.5 py-1.5 text-[0.8125rem] font-medium transition-all ${
         active ? "bg-fg-primary text-bg-base" : "text-fg-secondary hover:text-fg-primary"
       }`}
     >
@@ -2365,13 +2489,13 @@ function InsideCard({ title, lead, children }: { title: string; lead: string; ch
 function KV({ k, v, dot, accent = false, tip }: { k: string; v: string; dot?: string; accent?: boolean; tip?: string }) {
   return (
     <div className={`relative rounded-lg bg-white/[0.03] ring-1 ring-white/[0.05] px-3 py-2 ${tip ? "group cursor-help" : ""}`}>
-      <div className="text-[10px] tracking-wide text-fg-secondary/70">{k}</div>
+      <div className="text-[0.625rem] tracking-wide text-fg-secondary/70">{k}</div>
       <div className={`mt-0.5 text-base font-medium tracking-tight-brand ${accent ? "text-qdrant-red" : "text-fg-primary"}`}>
         {dot && <span className="inline-block h-2 w-2 rounded-full mr-1.5" style={{ background: dot }} />}
         {v}
       </div>
       {tip && (
-        <div className="pointer-events-none absolute bottom-full left-1/2 z-30 mb-2 hidden w-56 -translate-x-1/2 rounded-lg card-glass-strong px-3 py-2 text-[11px] leading-relaxed text-fg-primary/90 group-hover:block">
+        <div className="pointer-events-none absolute bottom-full left-1/2 z-30 mb-2 hidden w-56 -translate-x-1/2 rounded-lg card-glass-strong px-3 py-2 text-[0.6875rem] leading-relaxed text-fg-primary/90 group-hover:block">
           {tip}
         </div>
       )}
@@ -2418,13 +2542,13 @@ function ScalingCard({ variants }: { variants: VariantRow[] }) {
       lead="Estimated from the live configs. Vectors are memmapped from disk; the HNSW graph lives in RAM."
     >
       <div className="mt-3 space-y-1">
-        <div className="grid items-center gap-2 px-2 text-[10px] tracking-wide text-fg-secondary/70"
+        <div className="grid items-center gap-2 px-2 text-[0.625rem] tracking-wide text-fg-secondary/70"
           style={{ gridTemplateColumns: "1fr 70px 76px 76px" }}>
           <span>Collection</span><span>Points</span><span>Disk (vec)</span><span>RAM (graph)</span>
         </div>
         {rows.map((r) => (
           <div key={r.key}
-            className="grid items-center gap-2 rounded-lg bg-white/[0.03] ring-1 ring-white/[0.05] px-2 py-1.5 text-[12px]"
+            className="grid items-center gap-2 rounded-lg bg-white/[0.03] ring-1 ring-white/[0.05] px-2 py-1.5 text-[0.75rem]"
             style={{ gridTemplateColumns: "1fr 70px 76px 76px" }}>
             <span className="truncate font-mono text-fg-primary/90">{r.name}</span>
             <span className="text-fg-secondary">{(r.points / 1000).toFixed(0)}K</span>
@@ -2433,7 +2557,7 @@ function ScalingCard({ variants }: { variants: VariantRow[] }) {
           </div>
         ))}
         {rows.length > 0 && (
-          <div className="grid items-center gap-2 px-2 pt-1 text-[12px] font-medium"
+          <div className="grid items-center gap-2 px-2 pt-1 text-[0.75rem] font-medium"
             style={{ gridTemplateColumns: "1fr 70px 76px 76px" }}>
             <span className="text-fg-secondary">Total</span>
             <span className="text-fg-primary">{(totPoints / 1000).toFixed(0)}K</span>
@@ -2442,7 +2566,7 @@ function ScalingCard({ variants }: { variants: VariantRow[] }) {
           </div>
         )}
       </div>
-      <div className="mt-4 space-y-1.5 text-[13px] leading-relaxed text-fg-secondary">
+      <div className="mt-4 space-y-1.5 text-[0.8125rem] leading-relaxed text-fg-secondary">
         <p><span className="text-fg-primary">When to scale up:</span> graph RAM near your node&rsquo;s memory, p95 creeping, or ingest stalling the optimizer.</p>
         <p><span className="text-fg-primary">Levers before bigger hardware:</span> vectors on disk (done here), lower m, quantization for 4 to 32x smaller vectors, then shard across nodes.</p>
         <p>Search stays fast as data grows because HNSW work scales with <span className="text-fg-primary">log N</span>, not N. Same ef touches roughly the same node count at 100K as at 10K.</p>
@@ -2467,7 +2591,7 @@ function VerdictCard({ modeStats }: { modeStats: Record<string, number[]> }) {
       lead="Measured speed from this session, plus what each choice costs."
     >
       <div className="mt-3 space-y-1">
-        <div className="grid items-center gap-2 text-[10px] tracking-wide text-fg-secondary/70 px-2"
+        <div className="grid items-center gap-2 text-[0.625rem] tracking-wide text-fg-secondary/70 px-2"
           style={{ gridTemplateColumns: "94px 56px 62px 62px 1fr" }}>
           <span /><span>Speed</span><span>Accuracy</span><span>RAM cost</span><span>Best for</span>
         </div>
@@ -2475,7 +2599,7 @@ function VerdictCard({ modeStats }: { modeStats: Record<string, number[]> }) {
           const ms = avg(m.key);
           return (
             <div key={m.key}
-              className={`grid items-center gap-2 rounded-lg px-2 py-1.5 text-[12px] ${ms != null ? "bg-white/[0.04] ring-1 ring-white/[0.06]" : "opacity-45"}`}
+              className={`grid items-center gap-2 rounded-lg px-2 py-1.5 text-[0.75rem] ${ms != null ? "bg-white/[0.04] ring-1 ring-white/[0.06]" : "opacity-45"}`}
               style={{ gridTemplateColumns: "94px 56px 62px 62px 1fr" }}>
               <span className="truncate text-fg-primary/90">{m.key}</span>
               <span className="font-medium text-fg-primary">{ms != null ? `${ms}ms` : <Bar level={m.speed} />}</span>
@@ -2486,7 +2610,7 @@ function VerdictCard({ modeStats }: { modeStats: Record<string, number[]> }) {
           );
         })}
       </div>
-      <div className="mt-4 rounded-lg bg-qdrant-red/10 ring-1 ring-qdrant-red/25 px-4 py-3 text-[13px] leading-relaxed text-fg-primary/90">
+      <div className="mt-4 rounded-lg bg-qdrant-red/10 ring-1 ring-qdrant-red/25 px-4 py-3 text-[0.8125rem] leading-relaxed text-fg-primary/90">
         <span className="font-semibold text-qdrant-red">Our pick: </span>
         HNSW with ef 64 on cosine. Near-perfect accuracy, one graph in RAM
         {ef64 ? <>, measured <span className="text-fg-primary font-medium">{ef64} ms</span> here</> : null}
@@ -2519,13 +2643,13 @@ function ResultCard({ hit, rank, euclid = false, move = 0, onClick }: { hit: Sea
       exit={{ opacity: 0 }}
       transition={{ duration: 0.35, delay: rank * 0.09 }}
       onClick={onClick}
-      className="relative h-[118px] overflow-hidden rounded-lg cursor-pointer ring-1 ring-transparent transition-all hover:ring-white/40 hover:scale-[1.03]"
+      className="relative h-[7.375rem] overflow-hidden rounded-lg cursor-pointer ring-1 ring-transparent transition-all hover:ring-white/40 hover:scale-[1.03]"
       style={{ background: `linear-gradient(140deg, hsl(${hue},60%,30%) 0%, hsl(${(hue + 30) % 360},50%,12%) 100%)` }}
     >
       {hit.payload.poster && (
         // eslint-disable-next-line @next/next/no-img-element
         <img
-          src={hit.payload.poster}
+          src={posterSrc(hit.payload.poster)}
           alt=""
           className="absolute inset-0 h-full w-full object-cover"
           loading="lazy"
@@ -2533,17 +2657,17 @@ function ResultCard({ hit, rank, euclid = false, move = 0, onClick }: { hit: Sea
       )}
       <div aria-hidden className="absolute inset-0" style={{ background: `radial-gradient(circle at 22% 18%, hsla(${hue},85%,70%,0.35) 0%, transparent 55%)` }} />
       <div aria-hidden className="absolute inset-x-0 bottom-0 h-2/3" style={{ background: "linear-gradient(to top, rgba(11,15,25,0.9), transparent)" }} />
-      <div className="absolute left-2.5 top-2.5 flex items-center gap-1 rounded bg-black/45 px-2 py-0.5 text-[10px] font-semibold text-white/95 backdrop-blur">
+      <div className="absolute left-2.5 top-2.5 flex items-center gap-1 rounded bg-black/45 px-2 py-0.5 text-[0.625rem] font-semibold text-white/95 backdrop-blur">
         #{rank + 1}
         {move > 0 && <span style={{ color: "#4CAF50" }}>↑{move}</span>}
         {move < 0 && <span className="text-white/50">↓{-move}</span>}
       </div>
-      <div className="absolute right-2.5 top-2.5 rounded bg-black/45 px-2 py-0.5 text-[10px] font-medium text-white/95 backdrop-blur">
+      <div className="absolute right-2.5 top-2.5 rounded bg-black/45 px-2 py-0.5 text-[0.625rem] font-medium text-white/95 backdrop-blur">
         {scoreLabel}
       </div>
       <div className="absolute inset-x-0 bottom-0 p-3">
-        <div className="text-[13px] font-semibold leading-tight tracking-tight-brand text-white line-clamp-2">{hit.payload.title}</div>
-        <div className="mt-1 text-[10px] text-white/65">{hit.payload.genres[0]} · {hit.payload.year}</div>
+        <div className="text-[0.8125rem] font-semibold leading-tight tracking-tight-brand text-white line-clamp-2">{hit.payload.title}</div>
+        <div className="mt-1 text-[0.625rem] text-white/65">{hit.payload.genres[0]} · {hit.payload.year}</div>
       </div>
     </motion.div>
   );

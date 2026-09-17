@@ -29,6 +29,17 @@
   --brand-gradient: linear-gradient(135deg, #dc244c 0%, #6047ff 100%);
 }
 
+/* Booth scaling.
+   One build has to read on a 27" counter monitor and on a 55" screen across
+   an aisle, and we don't know which until we get there. Every size in the app
+   is rem, so the whole UI grows from this one number. Keyed to height as well
+   as width: a wide-but-short screen must not push the results off the fold.
+   Override for a known screen with ?scale=1.4 (see BoothScale). */
+html {
+  font-size: clamp(16px, min(1.6vw, 2.85vh), 40px);
+  font-size: calc(clamp(16px, min(1.6vw, 2.85vh), 40px) * var(--booth-scale, 1));
+}
+
 html,
 body {
   background-color: var(--bg-base);
