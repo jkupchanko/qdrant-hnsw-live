@@ -38,6 +38,17 @@ const MIN_ENCODE_MS = 4000; // hold the embed step long enough to register
 
 const EF_CYCLE = [16, 64, 128, 512] as const;
 const CYCLES_PER_EF = 2;
+/**
+ * Re-ranking runs on every third cycle.
+ *
+ * It used to default to off, which on an unattended screen meant the whole
+ * ranking act never ran: the cross-encoder only fired if somebody opened
+ * Settings and switched it on, and nobody is there to. Every third cycle
+ * gives a passer-by the plain result most of the time and the before/after
+ * rank movement often enough to catch it, without paying the cross-encoder's
+ * cost on every single search.
+ */
+const RERANK_EVERY = 3;
 const LAT_HISTORY = 40;
 const LOG_CAPACITY = 8;
 
@@ -279,7 +290,7 @@ export function HNSWLive() {
       if (o.ef !== undefined) setEfOverride(o.ef ?? null);
       if (o.topK) setTopK(o.topK);
       if (o.genre !== undefined) setGenreFilter(o.genre ?? null);
-      if (o.rerank !== undefined) setRerankMode(!!o.rerank);
+      if (o.rerank !== undefined) setRerankOverride(!!o.rerank);
       if (o.hybrid !== undefined) setHybridMode(!!o.hybrid);
       pendingRemoteRef.current = { id: d.id, text: d.text, since: Date.now() };
       lastPhoneAtRef.current = Date.now();
@@ -353,6 +364,9 @@ export function HNSWLive() {
   // Manual override wins; otherwise ef auto-cycles so the booth varies itself.
   const [efOverride, setEfOverride] = useState<number | null>(null);
   const currentEf = efOverride ?? EF_CYCLE[Math.floor(cycle / CYCLES_PER_EF) % EF_CYCLE.length];
+  // Same deal for re-ranking: a manual choice wins, otherwise it cycles in.
+  const [rerankOverride, setRerankOverride] = useState<boolean | null>(null);
+  const rerankMode = rerankOverride ?? cycle % RERANK_EVERY === RERANK_EVERY - 1;
 
   // When a phone-originated search finishes, send its summary back.
   useEffect(() => {
@@ -393,7 +407,6 @@ export function HNSWLive() {
   const [showDetails, setShowDetails] = useState(false);
   const [consoleOpen, setConsoleOpen] = useState(false); // see `started`: the booth opens running, not configuring
   const [compareKeyword, setCompareKeyword] = useState(false);
-  const [rerankMode, setRerankMode] = useState(false);
   const [hybridMode, setHybridMode] = useState(false);
   const [customSource, setCustomSource] = useState<"screen" | "phone" | null>(null);
 
@@ -426,7 +439,7 @@ export function HNSWLive() {
     setDecade(null);
     setPace(1);
     setTenant(null);
-    setRerankMode(false);
+    setRerankOverride(null);
     setHybridMode(false);
   };
 
@@ -1140,8 +1153,9 @@ export function HNSWLive() {
                   <div className="mt-0.5 mb-4 text-[0.8125rem] text-fg-secondary">Every choice applies to the next search.</div>
                   <div className="flex-1 min-h-0 overflow-y-auto pr-2 -mr-2 space-y-3.5">
                     <SetupRow label="Re-rank (cross-encoder)">
-                      <EfPill active={!rerankMode} onClick={() => setRerankMode(false)}>Off</EfPill>
-                      <EfPill active={rerankMode} onClick={() => setRerankMode(true)}>On</EfPill>
+                      <EfPill active={rerankOverride == null} onClick={() => setRerankOverride(null)}>Auto</EfPill>
+                      <EfPill active={rerankOverride === false} onClick={() => setRerankOverride(false)}>Off</EfPill>
+                      <EfPill active={rerankOverride === true} onClick={() => setRerankOverride(true)}>On</EfPill>
                     </SetupRow>
                     <SetupRow label="Hybrid (dense + keyword, RRF)">
                       <EfPill active={!hybridMode} onClick={() => setHybridMode(false)}>Off</EfPill>
