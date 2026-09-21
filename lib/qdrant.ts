@@ -193,6 +193,102 @@ export async function searchByVector(params: {
   return { points: res.result, timeMs: res.time * 1000 };
 }
 
+/**
+ * The hybrid collection: same 19,907 films, with BM25 and miniCOIL sparse
+ * vectors sitting next to the dense one. Built by scripts/add_sparse.py.
+ *
+ * This is deliberately a separate collection from COLLECTION. Sparse vectors
+ * are a collection-level config, and the booth cannot afford the live demo
+ * going down while we rebuild an index.
+ */
+export const HYBRID_COLLECTION = process.env.QDRANT_HYBRID_COLLECTION ?? "movies_hybrid";
+
+export interface SparseVector {
+  indices: number[];
+  values: number[];
+}
+
+/** The four ways this demo can retrieve, which are the four columns on screen. */
+export type RetrievalMode = "dense" | "bm25" | "minicoil" | "hybrid";
+
+export const MODE_LABELS: Record<RetrievalMode, string> = {
+  dense: "Dense",
+  bm25: "BM25 sparse",
+  minicoil: "miniCOIL sparse",
+  hybrid: "Hybrid, fused",
+};
+
+/**
+ * One retrieval, in whichever mode.
+ *
+ * The hybrid case is the point of the whole exercise: rather than running
+ * three searches and fusing the rank lists in our own JavaScript (which is
+ * what /api/hybrid used to do), it sends a single Query API call with three
+ * prefetches and lets Qdrant do Reciprocal Rank Fusion server-side. One round
+ * trip, and the fusion is the database's, not ours.
+ */
+export async function retrieve(params: {
+  mode: RetrievalMode;
+  /** Dense query vector — required for dense and hybrid. */
+  vector?: number[];
+  bm25?: SparseVector;
+  minicoil?: SparseVector;
+  limit?: number;
+  ef?: number;
+  exact?: boolean;
+  filter?: Filter;
+  /** How many candidates each arm contributes before fusion. */
+  prefetchLimit?: number;
+}): Promise<{ points: ScoredPoint[]; timeMs: number; arms: string[] }> {
+  const limit = params.limit ?? 6;
+  const pre = params.prefetchLimit ?? 20;
+  const denseParams = {
+    ...(params.ef ? { hnsw_ef: params.ef } : {}),
+    exact: params.exact ?? false,
+  };
+
+  let body: Record<string, unknown>;
+  const arms: string[] = [];
+
+  if (params.mode === "dense") {
+    if (!params.vector) throw new Error("dense retrieval needs a vector");
+    arms.push("dense");
+    body = { query: params.vector, params: denseParams };
+  } else if (params.mode === "bm25" || params.mode === "minicoil") {
+    const sparse = params.mode === "bm25" ? params.bm25 : params.minicoil;
+    if (!sparse) throw new Error(`${params.mode} retrieval needs its sparse vector`);
+    arms.push(params.mode);
+    body = { query: sparse, using: params.mode };
+  } else {
+    const prefetch: unknown[] = [];
+    if (params.vector) {
+      prefetch.push({ query: params.vector, limit: pre, params: denseParams });
+      arms.push("dense");
+    }
+    if (params.bm25) {
+      prefetch.push({ query: params.bm25, using: "bm25", limit: pre });
+      arms.push("bm25");
+    }
+    if (params.minicoil) {
+      prefetch.push({ query: params.minicoil, using: "minicoil", limit: pre });
+      arms.push("minicoil");
+    }
+    if (prefetch.length === 0) throw new Error("hybrid retrieval needs at least one arm");
+    body = { prefetch, query: { fusion: "rrf" } };
+  }
+
+  const res = await qdrant<RestResponse<{ points: ScoredPoint[] }>>(
+    `/collections/${HYBRID_COLLECTION}/points/query`,
+    {
+      ...body,
+      limit,
+      with_payload: true,
+      ...(params.filter ? { filter: params.filter } : {}),
+    },
+  );
+  return { points: res.result.points, timeMs: res.time * 1000, arms };
+}
+
 export interface CollectionInfo {
   status: string;
   optimizer_status: string | { error: string };
