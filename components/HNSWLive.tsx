@@ -1069,7 +1069,7 @@ export function HNSWLive() {
 
           {/* PIPELINE RAIL — the whole process, in order, always visible */}
           <div className="absolute top-5 left-1/2 -translate-x-1/2 z-10">
-            <StepRail phase={phase} />
+            <StepRail phase={phase} reranking={rerankMode} />
           </div>
 
           {/* DEGRADED BADGE — if the venue wifi or the cluster drops, say so
@@ -1381,10 +1381,11 @@ export function HNSWLive() {
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 transition={{ duration: 0.4 }}
-                className="absolute inset-0 flex flex-col justify-between px-10 pb-6 pt-4"
+                className="absolute inset-0 flex flex-col justify-end px-10 pb-6"
               >
                 {/* Top: what is being looked at. Nothing covers the cloud. */}
-                <div className="max-w-[26ch] self-start rounded-xl bg-bg-base/95 px-6 py-3 text-left ring-1 ring-white/10">
+                <div className="flex items-end justify-between gap-6">
+                <div className="max-w-[30ch] rounded-xl bg-bg-base/95 px-6 py-4 text-left ring-1 ring-white/10">
                   <div
                     className="font-semibold tracking-tight-brand text-fg-primary"
                     style={{ fontSize: "clamp(1.3rem, 2vw, 2rem)", lineHeight: 1.15 }}
@@ -1401,7 +1402,7 @@ export function HNSWLive() {
                     romance and musical anchors, which are the two clusters
                     that make the point. One idea per act; the distance
                     geometry has its own hover explorer. */}
-                <div className="flex w-full max-w-[42vw] items-center gap-4 self-end rounded-xl bg-bg-base/95 px-5 py-3 ring-1 ring-white/10">
+                <div className="flex w-full max-w-[42vw] items-center gap-4 rounded-xl bg-bg-base/95 px-5 py-3 ring-1 ring-white/10">
                   <div
                     onMouseEnter={() => setExplorerOpen(true)}
                     className="shrink-0 cursor-zoom-in"
@@ -1417,6 +1418,7 @@ export function HNSWLive() {
                       <VectorStrip vector={current.vector} />
                     </div>
                   </div>
+                </div>
                 </div>
               </motion.div>
             )}
@@ -2279,36 +2281,79 @@ function BurstTest({ queries }: { queries: Query[] }) {
   );
 }
 
-const STEPS: Array<{ key: string; label: string; phases: Phase[] }> = [
-  { key: "text", label: "Ask", phases: ["typing"] },
-  { key: "embed", label: "Embed", phases: ["encoding"] },
-  { key: "search", label: "Search", phases: ["walking"] },
-  { key: "rank", label: "Answer", phases: ["results", "hold"] },
-];
+/**
+ * The pipeline spine.
+ *
+ * This is the one element on screen that answers "what am I looking at" for
+ * somebody who knows nothing about vector search, so it stopped being a row
+ * of 12px pills. Numbered stages, plain words, and a connector that fills as
+ * the run progresses — the motion is what makes a passer-by read it, and the
+ * numbers are what make it legible from across a room.
+ *
+ * The re-rank stage only appears on cycles that actually re-rank, so the rail
+ * never advertises work the run did not do.
+ */
+interface Step { key: string; label: string; phases: Phase[] }
 
-/** Always-visible pipeline stepper — shows where we are in the process. */
-function StepRail({ phase }: { phase: Phase }) {
-  const activeIdx = STEPS.findIndex((s) => s.phases.includes(phase));
+function stepsFor(reranking: boolean): Step[] {
+  return reranking
+    ? [
+        { key: "ask", label: "Question", phases: ["typing"] },
+        { key: "embed", label: "Numbers", phases: ["encoding"] },
+        { key: "search", label: "Search", phases: ["walking"] },
+        { key: "rerank", label: "Re-rank", phases: ["results"] },
+        { key: "answer", label: "Answers", phases: ["hold"] },
+      ]
+    : [
+        { key: "ask", label: "Question", phases: ["typing"] },
+        { key: "embed", label: "Numbers", phases: ["encoding"] },
+        { key: "search", label: "Search", phases: ["walking"] },
+        { key: "answer", label: "Answers", phases: ["results", "hold"] },
+      ];
+}
+
+function StepRail({ phase, reranking }: { phase: Phase; reranking: boolean }) {
+  const steps = stepsFor(reranking);
+  const activeIdx = steps.findIndex((s) => s.phases.includes(phase));
   return (
-    <div className="flex items-center gap-1 rounded-md card-glass-strong px-2 py-1.5">
-      {STEPS.map((s, i) => {
+    <div className="flex items-center rounded-xl bg-bg-base/90 px-5 py-2.5 ring-1 ring-white/10">
+      {steps.map((s, i) => {
         const active = i === activeIdx;
         const done = activeIdx > i;
+        const reached = active || done;
         return (
           <div key={s.key} className="flex items-center">
-            <span
-              className={`rounded px-3.5 py-1 text-xs font-medium transition-all duration-300 ${
-                active
-                  ? "bg-qdrant-red text-white shadow-glow"
-                  : done
-                    ? "text-fg-primary/80"
-                    : "text-fg-secondary/50"
-              }`}
-            >
-              {s.label}
-            </span>
-            {i < STEPS.length - 1 && (
-              <span className={`mx-0.5 text-[0.625rem] ${done ? "text-fg-primary/60" : "text-fg-secondary/30"}`}>→</span>
+            <div className="flex items-center gap-2.5">
+              <span
+                className="relative flex items-center justify-center rounded-full font-semibold tabular-nums transition-all duration-500"
+                style={{
+                  width: "1.75em",
+                  height: "1.75em",
+                  fontSize: "clamp(0.75rem, 0.85vw, 1rem)",
+                  background: reached ? "#DC244C" : "transparent",
+                  color: reached ? "#FFFFFF" : "#656B7F",
+                  boxShadow: active ? "0 0 0 0.3em rgba(220,36,76,0.22)" : "inset 0 0 0 1px #4E5366",
+                }}
+              >
+                {i + 1}
+              </span>
+              <span
+                className="whitespace-nowrap font-medium transition-colors duration-500"
+                style={{
+                  fontSize: "clamp(0.8125rem, 0.95vw, 1.15rem)",
+                  color: active ? "#F0F3FA" : done ? "rgba(240,243,250,0.65)" : "#656B7F",
+                }}
+              >
+                {s.label}
+              </span>
+            </div>
+            {i < steps.length - 1 && (
+              <span className="relative mx-3 h-[2px] w-[2.5vw] overflow-hidden rounded-full bg-white/10">
+                <span
+                  className="absolute inset-y-0 left-0 rounded-full transition-all duration-700 ease-out"
+                  style={{ width: done ? "100%" : "0%", background: "#DC244C" }}
+                />
+              </span>
             )}
           </div>
         );
