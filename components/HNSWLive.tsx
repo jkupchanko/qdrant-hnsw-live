@@ -458,6 +458,22 @@ export function HNSWLive() {
     QRCode.toDataURL(remoteTarget, { ...opts, width: 560 }).then(setRemoteQrBig).catch(() => {});
   }, []);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  /**
+   * Where each genre sits on the map.
+   *
+   * The embed act used to be a bar chart of 384 floats over a dimmed map,
+   * which tells a passer-by nothing. The interesting claim is that the space
+   * has geography: nobody tagged these films, and yet romance drifts one way
+   * and horror the other, purely out of what the plots say.
+   *
+   * Measured rather than asserted. Only genres whose centroid sits at least
+   * 0.55 of the cloud's mean radius from the middle get a label — animation
+   * and fantasy sit almost dead centre and labelling them would be a lie
+   * about how clean the separation is.
+   */
+  const [genreAnchors, setGenreAnchors] = useState<
+    Array<{ genre: string; tx: number; ty: number; count: number; sep: number }>
+  >([]);
   const staticLayerRef = useRef<HTMLCanvasElement | null>(null); // 100K points pre-rendered once
   const pointsRef = useRef<Point[]>([]);
   const pointByIdRef = useRef<Map<number, Point>>(new Map());
@@ -505,6 +521,32 @@ export function HNSWLive() {
       color: colorFor(m.genres),
     }));
     pointsRef.current = pts;
+
+    {
+      const sums = new Map<string, { x: number; y: number; n: number }>();
+      movies.forEach((m, i) => {
+        const pt = pts[i];
+        for (const g of m.genres) {
+          const cur = sums.get(g) ?? { x: 0, y: 0, n: 0 };
+          cur.x += pt.tx; cur.y += pt.ty; cur.n += 1;
+          sums.set(g, cur);
+        }
+      });
+      const gx = pts.reduce((a, p) => a + p.tx, 0) / pts.length;
+      const gy = pts.reduce((a, p) => a + p.ty, 0) / pts.length;
+      const radius =
+        pts.reduce((a, p) => a + Math.hypot(p.tx - gx, p.ty - gy), 0) / pts.length;
+      const anchors = [...sums.entries()]
+        .filter(([, v]) => v.n >= 200)
+        .map(([genre, v]) => {
+          const cx = v.x / v.n, cy = v.y / v.n;
+          return { genre, tx: cx, ty: cy, count: v.n, sep: Math.hypot(cx - gx, cy - gy) / radius };
+        })
+        .filter((a) => a.sep >= 0.55)
+        .sort((a, b) => b.sep - a.sep);
+      setGenreAnchors(anchors);
+    }
+
     const idx = new Map<number, Point>();
     for (const p of pts) idx.set(p.id, p);
     pointByIdRef.current = idx;
@@ -1326,40 +1368,90 @@ export function HNSWLive() {
             )}
           </AnimatePresence>
 
-          {/* EMBED — the actual query vector, painted as color */}
+          {/* EMBED — the map, and the query about to join it.
+              This act answers "what is a vector, and why should I care" with
+              geography rather than a bar chart: 19,907 plots already placed,
+              genres drifting apart on their own, and the 384 numbers shown
+              small underneath as the evidence rather than the headline. */}
           <AnimatePresence>
             {phase === "encoding" && current && (
               <motion.div
                 key="embed"
-                initial={{ opacity: 0, scale: 0.96 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 1.02 }}
-                className="absolute inset-0 flex flex-col items-center justify-center bg-bg-base/55 backdrop-blur-[2px] px-16 text-center"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.4 }}
+                className="absolute inset-0 flex flex-col justify-between px-10 pb-6 pt-4"
               >
-                <div className="eyebrow mb-4">Embedding</div>
-                <div className="text-2xl font-semibold tracking-tight-brand text-fg-primary mb-8 max-w-[36ch]">
-                  &ldquo;{current.text}&rdquo; becomes 384 numbers
+                {/* Top: what is being looked at. Nothing covers the cloud. */}
+                <div className="max-w-[26ch] self-start rounded-xl bg-bg-base/95 px-6 py-3 text-left ring-1 ring-white/10">
+                  <div
+                    className="font-semibold tracking-tight-brand text-fg-primary"
+                    style={{ fontSize: "clamp(1.3rem, 2vw, 2rem)", lineHeight: 1.15 }}
+                  >
+                    Similar stories land near each other
+                  </div>
+                  <div className="mt-1.5 text-[0.8125rem] leading-snug text-fg-secondary">
+                    Nobody tagged these. The map arranged itself.
+                  </div>
                 </div>
-                <VectorStrip vector={current.vector} />
-                <div className="mt-4 text-sm text-fg-secondary/70">The real vector.</div>
-                <div
-                  onMouseEnter={() => setExplorerOpen(true)}
-                  className="mt-5 flex items-center gap-5 rounded-lg card-glass-strong px-5 py-3 ring-1 ring-transparent transition-all hover:ring-white/25 cursor-zoom-in"
-                >
-                  <DistanceViz metric={distanceSel} />
-                  <div className="text-left max-w-[30ch]">
-                    <div className="text-[0.8125rem] font-medium text-fg-primary">
-                      {distanceSel === "cosine" && "Cosine, comparing direction"}
-                      {distanceSel === "dot" && "Dot product, direction and length"}
-                      {distanceSel === "euclid" && "Euclidean, straight-line distance"}
+
+                {/* Bottom: the query turning into numbers, kept secondary and
+                    kept SHORT. The taller version of this panel covered the
+                    romance and musical anchors, which are the two clusters
+                    that make the point. One idea per act; the distance
+                    geometry has its own hover explorer. */}
+                <div className="flex w-full max-w-[42vw] items-center gap-4 self-end rounded-xl bg-bg-base/95 px-5 py-3 ring-1 ring-white/10">
+                  <div
+                    onMouseEnter={() => setExplorerOpen(true)}
+                    className="shrink-0 cursor-zoom-in"
+                    title="How similarity is measured"
+                  >
+                    <DistanceViz metric={distanceSel} />
+                  </div>
+                  <div className="min-w-0 flex-1 text-left">
+                    <div className="truncate text-[0.9375rem] text-fg-secondary">
+                      &ldquo;<span className="text-fg-primary/90">{current.text}</span>&rdquo; becomes 384 numbers
                     </div>
-                    <div className="mt-0.5 text-[0.6875rem] leading-relaxed text-fg-secondary">
-                      {distanceSel === "cosine" && "Two vectors match when they point the same way. The angle is the score."}
-                      {distanceSel === "dot" && "Like cosine, but longer vectors score higher too."}
-                      {distanceSel === "euclid" && "Two vectors match when their points sit close together in space."}
+                    <div className="mt-1.5">
+                      <VectorStrip vector={current.vector} />
                     </div>
                   </div>
                 </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* GENRE ANCHORS — drawn at measured centroids, not decoration.
+              Held through the walk too, so the path has somewhere to be. */}
+          <AnimatePresence>
+            {(phase === "encoding" || phase === "walking") && genreAnchors.length > 0 && (
+              <motion.div
+                key="anchors"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.5 }}
+                className="pointer-events-none absolute inset-0 z-[5]"
+              >
+                {genreAnchors.map((a) => (
+                  <div
+                    key={a.genre}
+                    className="absolute -translate-x-1/2 -translate-y-1/2 whitespace-nowrap rounded-md px-2.5 py-1 font-semibold uppercase tracking-wider"
+                    style={{
+                      left: a.tx,
+                      top: a.ty,
+                      fontSize: "clamp(0.75rem, 1vw, 1.05rem)",
+                      color: GENRE_COLOR[a.genre] ?? "#8a90a6",
+                      background: "rgba(6,9,16,0.82)",
+                      // Weaker separation, weaker claim.
+                      opacity: 0.6 + Math.min(a.sep, 1) * 0.4,
+                      boxShadow: "0 0 0 1px rgba(255,255,255,0.08)",
+                    }}
+                  >
+                    {a.genre}
+                  </div>
+                ))}
               </motion.div>
             )}
           </AnimatePresence>
