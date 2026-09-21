@@ -2619,11 +2619,31 @@ function VerdictCard({ modeStats }: { modeStats: Record<string, number[]> }) {
           );
         })}
       </div>
+      {/* Honesty, and the reason this card exists.
+          At 19,907 vectors a brute-force scan is a couple of milliseconds, so
+          the index does not reliably win a stopwatch race here — at high ef it
+          loses one. Claiming otherwise in front of a visitor who toggles exact
+          scan would cost more than the claim is worth. The argument that does
+          hold at this size is work avoided, and that is the one that scales. */}
       <div className="mt-4 rounded-lg bg-qdrant-red/10 ring-1 ring-qdrant-red/25 px-4 py-3 text-[0.8125rem] leading-relaxed text-fg-primary/90">
         <span className="font-semibold text-qdrant-red">Our pick: </span>
         HNSW with ef 64 on cosine. Near-perfect accuracy, one graph in RAM
-        {ef64 ? <>, measured <span className="text-fg-primary font-medium">{ef64} ms</span> here</> : null}
-        {slowdown ? <>. Exact scan was <span className="text-fg-primary font-medium">{slowdown}×</span> slower for the same answers</> : null}.
+        {ef64 ? <>, measured <span className="text-fg-primary font-medium">{ef64} ms</span> here</> : null}.
+        {exact ? (
+          slowdown && slowdown >= 1.2 ? (
+            <> A full scan of all {"19,907"} vectors took{" "}
+              <span className="text-fg-primary font-medium">{exact} ms</span>, so the index is{" "}
+              <span className="text-fg-primary font-medium">{slowdown}×</span> ahead — at this size.</>
+          ) : (
+            <> A full scan of all {"19,907"} vectors took{" "}
+              <span className="text-fg-primary font-medium">{exact} ms</span>, which is no slower.
+              Twenty thousand vectors is small enough that brute force is fine.</>
+          )
+        ) : null}{" "}
+        The index is not really about the stopwatch here — it is about how much
+        data gets read. HNSW looks at roughly{" "}
+        <span className="text-fg-primary font-medium">2 × ef</span> vectors instead of all of
+        them. Hold that ratio and picture a hundred million rows: that is the argument.
         Dim rows have not run yet — pick them in Settings to fill this in.
       </div>
     </InsideCard>
