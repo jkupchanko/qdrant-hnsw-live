@@ -11,6 +11,7 @@ import QRCode from "qrcode";
 import { embedText, rerankPairs } from "@/lib/embed";
 import { posterSrc } from "@/lib/poster";
 import { SearchAct } from "./SearchAct";
+import { RankAct } from "./RankAct";
 
 const REPO_URL = "https://github.com/jkupchanko/qdrant-hnsw-live";
 
@@ -26,7 +27,7 @@ const REPO_URL = "https://github.com/jkupchanko/qdrant-hnsw-live";
  */
 
 type Phase = "typing" | "encoding" | "walking" | "results" | "hold" | "clearing";
-type Tab = "demo" | "search" | "inside" | "compare";
+type Tab = "demo" | "search" | "rank" | "inside" | "compare";
 
 const WALK_MS = 2600;
 const RESULTS_MS = 800;
@@ -236,9 +237,9 @@ export function HNSWLive() {
   useEffect(() => {
     if (!rotating) return;
     const dwell: Record<Tab, number> = {
-      demo: 90_000, search: 60_000, inside: 45_000, compare: 45_000,
+      demo: 80_000, search: 55_000, rank: 55_000, inside: 40_000, compare: 40_000,
     };
-    const order: Tab[] = ["demo", "search", "inside", "compare"];
+    const order: Tab[] = ["demo", "search", "rank", "inside", "compare"];
     const t = setTimeout(() => {
       setTab((cur) => order[(order.indexOf(cur) + 1) % order.length]);
     }, dwell[tab] * dwellScale);
@@ -983,6 +984,7 @@ export function HNSWLive() {
         <div className="flex shrink-0 items-center gap-1 rounded-md bg-white/[0.04] ring-1 ring-white/[0.06] p-1">
           <TabButton active={tab === "demo"} onClick={() => setTab("demo")}>Live demo</TabButton>
           <TabButton active={tab === "search"} onClick={() => setTab("search")}>Dense vs sparse</TabButton>
+          <TabButton active={tab === "rank"} onClick={() => setTab("rank")}>Ranking</TabButton>
           <TabButton active={tab === "compare"} onClick={() => setTab("compare")}>Compare</TabButton>
           <TabButton active={tab === "inside"} onClick={() => setTab("inside")}>Under the hood</TabButton>
         </div>
@@ -1642,6 +1644,11 @@ export function HNSWLive() {
       </main>
 
       {/* ─── COMPARE TAB ─── */}
+      {/* ACT FOUR — ranking, and the two scorers disagreeing. */}
+      <main className={`flex-1 min-h-0 ${tab === "rank" ? "block" : "hidden"}`}>
+        <RankAct queries={queries} />
+      </main>
+
       {/* ACT TWO — the retrieval methods, raced against each other. */}
       <main className={`flex-1 min-h-0 ${tab === "search" ? "block" : "hidden"}`}>
         <SearchAct queries={queries} />
