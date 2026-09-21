@@ -10,6 +10,7 @@ import { CompareLab } from "./CompareLab";
 import QRCode from "qrcode";
 import { embedText, rerankPairs } from "@/lib/embed";
 import { posterSrc } from "@/lib/poster";
+import { SearchAct } from "./SearchAct";
 
 const REPO_URL = "https://github.com/jkupchanko/qdrant-hnsw-live";
 
@@ -25,7 +26,7 @@ const REPO_URL = "https://github.com/jkupchanko/qdrant-hnsw-live";
  */
 
 type Phase = "typing" | "encoding" | "walking" | "results" | "hold" | "clearing";
-type Tab = "demo" | "inside" | "compare";
+type Tab = "demo" | "search" | "inside" | "compare";
 
 const WALK_MS = 2600;
 const RESULTS_MS = 800;
@@ -223,8 +224,10 @@ export function HNSWLive() {
   // off the tab they just opened.
   useEffect(() => {
     if (!rotating) return;
-    const dwell: Record<Tab, number> = { demo: 100_000, compare: 55_000, inside: 45_000 };
-    const order: Tab[] = ["demo", "compare", "inside"];
+    const dwell: Record<Tab, number> = {
+      demo: 90_000, search: 60_000, inside: 45_000, compare: 45_000,
+    };
+    const order: Tab[] = ["demo", "search", "inside", "compare"];
     const t = setTimeout(() => {
       setTab((cur) => order[(order.indexOf(cur) + 1) % order.length]);
     }, dwell[tab] * dwellScale);
@@ -910,7 +913,7 @@ export function HNSWLive() {
           centred tab group. At booth scale the title grew straight under the
           centred tabs; now the three blocks simply cannot overlap. */}
       <header className="relative flex items-center gap-6 border-b border-white/[0.05] px-10 pt-6 pb-5">
-        <div className="flex min-w-0 flex-[2] items-center gap-4">
+        <div className="flex min-w-0 flex-[3] items-center gap-4">
           <QdrantLogo className="h-7 shrink-0" />
           <span className="h-8 w-px shrink-0 bg-white/10" />
           <div className="min-w-0 leading-tight">
@@ -924,6 +927,7 @@ export function HNSWLive() {
         </div>
         <div className="flex shrink-0 items-center gap-1 rounded-md bg-white/[0.04] ring-1 ring-white/[0.06] p-1">
           <TabButton active={tab === "demo"} onClick={() => setTab("demo")}>Live demo</TabButton>
+          <TabButton active={tab === "search"} onClick={() => setTab("search")}>Dense vs sparse</TabButton>
           <TabButton active={tab === "compare"} onClick={() => setTab("compare")}>Compare</TabButton>
           <TabButton active={tab === "inside"} onClick={() => setTab("inside")}>Under the hood</TabButton>
         </div>
@@ -1530,6 +1534,11 @@ export function HNSWLive() {
       </main>
 
       {/* ─── COMPARE TAB ─── */}
+      {/* ACT TWO — the retrieval methods, raced against each other. */}
+      <main className={`flex-1 min-h-0 ${tab === "search" ? "block" : "hidden"}`}>
+        <SearchAct queries={queries} />
+      </main>
+
       <main className={`flex-1 min-h-0 px-10 pb-8 overflow-y-auto ${tab === "compare" ? "block" : "hidden"}`}>
         <CompareLab active={tab === "compare"} />
       </main>
@@ -2467,7 +2476,7 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
   return (
     <button
       onClick={onClick}
-      className={`whitespace-nowrap rounded px-3.5 py-1.5 text-[0.8125rem] font-medium transition-all ${
+      className={`whitespace-nowrap rounded px-3 py-1.5 text-[0.75rem] font-medium transition-all ${
         active ? "bg-fg-primary text-bg-base" : "text-fg-secondary hover:text-fg-primary"
       }`}
     >
