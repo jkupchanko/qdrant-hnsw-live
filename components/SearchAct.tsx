@@ -63,21 +63,14 @@ const COLUMNS: Array<{ key: ModeKey; title: string; lead: string; accent: string
   },
 ];
 
-const DWELL_MS = 13000;
-
-export function SearchAct({ queries }: { queries: Query[] }) {
-  const [idx, setIdx] = useState(0);
+export function SearchAct({ query }: { query: Query | null }) {
   const [results, setResults] = useState<ApiResult[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const reqRef = useRef(0);
 
-  // Only queries carrying sparse vectors can run the full race.
-  const runnable = queries.filter((q) => q.bm25 && q.minicoil);
-  const query = runnable.length > 0 ? runnable[idx % runnable.length] : null;
-
   useEffect(() => {
-    if (!query) return;
+    if (!query?.bm25 || !query?.minicoil) return;
     const ticket = ++reqRef.current;
     setLoading(true);
     setError(null);
@@ -104,14 +97,6 @@ export function SearchAct({ queries }: { queries: Query[] }) {
         if (ticket === reqRef.current) setLoading(false);
       });
   }, [query]);
-
-  // Advance on a timer, and keep advancing through a failed request so a dead
-  // cluster cannot park the act on one broken query.
-  useEffect(() => {
-    if (runnable.length < 2) return;
-    const t = setTimeout(() => setIdx((i) => i + 1), DWELL_MS);
-    return () => clearTimeout(t);
-  }, [idx, runnable.length]);
 
   const byMode = new Map((results ?? []).map((r) => [r.mode, r]));
 
@@ -140,32 +125,17 @@ export function SearchAct({ queries }: { queries: Query[] }) {
   const slowest = times.length > 0 ? Math.max(...times) : null;
 
   return (
-    <div className="flex h-full flex-col px-10 pb-8 pt-6">
-      <div className="shrink-0 text-center">
-        <div className="eyebrow mb-3">One question, four ways to find it</div>
-        <AnimatePresence mode="wait">
-          <motion.div
-            key={query?.text ?? "none"}
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -8 }}
-            transition={{ duration: 0.35 }}
-            className="font-semibold tracking-tight-brand text-fg-primary"
-            style={{ fontSize: "clamp(1.6rem, 2.8vw, 2.7rem)", lineHeight: 1.15 }}
-          >
-            &ldquo;{query?.text ?? "loading"}&rdquo;
-          </motion.div>
-        </AnimatePresence>
-      </div>
-
-      <div className="mt-7 grid min-h-0 flex-1 grid-cols-4 gap-4">
+    <div className="flex h-full flex-col">
+      {/* No headline and no repeat of the question: the question band above
+          owns that, and this band is under a quarter of the screen. */}
+      <div className="grid min-h-0 flex-1 grid-cols-4 gap-3">
         {COLUMNS.map((col) => {
           const res = byMode.get(col.key);
           const isHybrid = col.key === "hybrid";
           return (
             <div
               key={col.key}
-              className={`flex min-h-0 flex-col overflow-hidden rounded-xl p-5 ring-1 ${
+              className={`flex min-h-0 flex-col overflow-hidden rounded-xl px-4 py-2.5 ring-1 ${
                 isHybrid
                   ? "bg-qdrant-red/[0.07] ring-qdrant-red/30"
                   : "bg-white/[0.02] ring-white/[0.06]"
@@ -191,7 +161,7 @@ export function SearchAct({ queries }: { queries: Query[] }) {
                       : "—"}
                 </span>
               </div>
-              <div className="mt-1.5 text-[0.8125rem] leading-snug text-fg-secondary">
+              <div className="mt-0.5 truncate text-[0.8125rem] leading-snug text-fg-secondary">
                 {col.lead}
               </div>
 
@@ -200,8 +170,8 @@ export function SearchAct({ queries }: { queries: Query[] }) {
                   {res.reason}
                 </div>
               ) : (
-                <div className="mt-4 flex min-h-0 flex-1 flex-col gap-2">
-                  {(res?.hits ?? []).slice(0, 3).map((h, i) => {
+                <div className="mt-2 flex min-h-0 flex-1 flex-col gap-2">
+                  {(res?.hits ?? []).slice(0, 1).map((h, i) => {
                     const from = isHybrid ? sourcesFor(h.id) : [];
                     const hue = h.payload.hue ?? 320;
                     return (
@@ -210,7 +180,7 @@ export function SearchAct({ queries }: { queries: Query[] }) {
                         className="flex items-center gap-2.5 rounded-lg bg-black/25 p-2"
                       >
                         <div
-                          className="h-11 w-8 shrink-0 overflow-hidden rounded"
+                          className="h-12 w-9 shrink-0 overflow-hidden rounded"
                           style={{
                             background: h.payload.poster
                               ? `url(${posterSrc(h.payload.poster)}) center/cover`
@@ -218,18 +188,17 @@ export function SearchAct({ queries }: { queries: Query[] }) {
                           }}
                         />
                         <div className="min-w-0 flex-1">
-                          <div className="line-clamp-2 text-[0.875rem] font-medium leading-tight text-fg-primary">
+                          <div className="line-clamp-2 text-[0.95rem] font-medium leading-tight text-fg-primary">
                             {h.payload.title}
                           </div>
-                          <div className="text-[0.75rem] text-fg-secondary">
-                            {h.payload.year}
-                            {from.length > 0 && (
-                              <span style={{ color: col.accent }}>
-                                {" · "}
-                                {from.length === SOURCES.length ? "all three agreed" : from.join(" + ")}
-                              </span>
-                            )}
-                          </div>
+                          {/* No year here: it clipped the band and the title
+                              is the comparison. Only the fused column has
+                              something to add, so only it says anything. */}
+                          {from.length > 0 && (
+                            <div className="truncate text-[0.75rem]" style={{ color: col.accent }}>
+                              {from.length === SOURCES.length ? "all three agreed" : from.join(" + ")}
+                            </div>
+                          )}
                         </div>
                       </div>
                     );
@@ -244,25 +213,6 @@ export function SearchAct({ queries }: { queries: Query[] }) {
         })}
       </div>
 
-      <div className="mt-5 shrink-0 text-center text-[0.875rem] text-fg-secondary">
-        {error ? (
-          <span className="text-fg-primary/80">The cluster did not answer. Moving on.</span>
-        ) : (
-          <>
-            Same films, one cluster. The fused column is a{" "}
-            <span className="text-fg-primary/85">single request</span>
-            {slowest != null && (
-              <>
-                , all of it in{" "}
-                <span className="text-fg-primary/85">
-                  {slowest < 1 ? "under a millisecond" : `${slowest.toFixed(1)} ms`}
-                </span>
-              </>
-            )}
-            .
-          </>
-        )}
-      </div>
     </div>
   );
 }

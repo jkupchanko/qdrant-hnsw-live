@@ -24,8 +24,12 @@ keep only the ones that demonstrably work. A query earns its place when
 Anything else would put "After re-ranking" on a booth screen above an order
 that is not better, in front of someone who can read both rows.
 
-Writes public/data/rank-queries.json: text, vector, and the measured stats
-that got it in.
+These same queries drive the whole single-screen pipeline, not just the
+ranking band, so each one also carries its BM25 and miniCOIL sparse vectors
+for the four-way race.
+
+Writes public/data/rank-queries.json: text, dense vector, both sparse
+vectors, and the measured stats that got it in.
 """
 
 from __future__ import annotations
@@ -80,6 +84,7 @@ def main() -> int:
     except ImportError:
         pass
 
+    from fastembed import SparseTextEmbedding
     from qdrant_client import QdrantClient
     from sentence_transformers import CrossEncoder, SentenceTransformer
 
@@ -91,6 +96,15 @@ def main() -> int:
     client = QdrantClient(url=url, api_key=key, timeout=60)
     encoder = SentenceTransformer(ENCODER)
     reranker = CrossEncoder(RERANKER)
+    bm25 = SparseTextEmbedding(model_name="Qdrant/bm25")
+    minicoil = SparseTextEmbedding(model_name="Qdrant/minicoil-v1")
+
+    def sparse(model, text: str) -> dict:
+        v = list(model.query_embed([text]))[0]
+        return {
+            "indices": v.indices.tolist(),
+            "values": [round(float(x), 6) for x in v.values],
+        }
 
     kept: list[dict] = []
     for text in POOL:
@@ -122,6 +136,8 @@ def main() -> int:
             kept.append({
                 "text": text,
                 "vector": [round(x, 6) for x in vector],
+                "bm25": sparse(bm25, text),
+                "minicoil": sparse(minicoil, text),
                 "topLogit": round(top_logit, 3),
                 "promoted": promoted,
                 "changedTop": bool(new_top != 0),

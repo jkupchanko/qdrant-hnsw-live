@@ -7,26 +7,30 @@ import { rerankPairs } from "@/lib/embed";
 import type { Query, MoviePayload } from "@/lib/types";
 
 /**
- * ACT FOUR — ranking, and why the first order is not the final one.
+ * THE RANKED BAND — one row that visibly changes its mind.
  *
- * Two rows. The top one is what vector search returned, by cosine score. The
- * bottom one starts as a copy of it and then physically re-sorts as the
- * cross-encoder's scores land: cards slide past each other, losers drop out,
- * and titles that were buried deep in the candidate list arrive from nowhere.
+ * The row first appears in vector-search order with cosine scores. Then the
+ * cross-encoder finishes and the same row re-sorts in place: cards slide past
+ * each other, weak ones drop out, and titles buried deep in the candidate
+ * list arrive from nowhere carrying "was #13".
  *
- * The movement is the argument. Two scorers looked at the same films and
- * disagreed, and you can watch them disagree.
+ * One row rather than a before/after pair, because the movement is the
+ * argument and a single row shows movement better than two static ones — and
+ * because on the one-screen layout this band is a quarter of the height.
  *
- * Both numbers are shown because they measure different things. Cosine is the
+ * Both numbers get shown because they measure different things. Cosine is the
  * angle between two vectors and never sees the words. The cross-encoder reads
  * the question and the plot together, which is why it is better and why it
- * costs a second and a half instead of a millisecond.
+ * costs a second instead of a millisecond.
+ *
+ * Only runs on queries the re-ranker can actually rank — see
+ * scripts/build_rank_queries.py. On mood queries every score sits at the
+ * floor and the reordering is noise.
  */
 
 const CANDIDATES = 18;
 const SHOWN = 6;
-const SETTLE_MS = 2200;
-const HOLD_MS = 7000;
+const SETTLE_MS = 1800;
 
 interface Hit {
   id: number;
@@ -44,48 +48,23 @@ interface Row extends Hit {
 /** ms-marco emits an unbounded logit; squash it so a score reads as relevance. */
 const sigmoid = (x: number): number => 1 / (1 + Math.exp(-x));
 
-type Stage = "searching" | "vector" | "reranked";
-
-export function RankAct() {
-  /**
-   * This act runs its own query set, not the loop's.
-   *
-   * The looping queries are moods, and a cross-encoder cannot rank those —
-   * measured, both ms-marco and bge-reranker-base score every candidate at
-   * the floor, because a plot summary never *answers* a request for a
-   * recommendation. These are descriptive, plot-shaped queries, and every one
-   * of them was validated offline by scripts/build_rank_queries.py: it kept
-   * only queries where the model finds something it believes in and where
-   * re-ranking visibly changes the answer.
-   */
-  const [queries, setQueries] = useState<Query[]>([]);
-  useEffect(() => {
-    fetch("/data/rank-queries.json", { cache: "no-store" })
-      .then((r) => r.json())
-      .then((d: Query[]) => setQueries(d))
-      .catch(() => setQueries([]));
-  }, []);
-  const [idx, setIdx] = useState(0);
-  const [stage, setStage] = useState<Stage>("searching");
-  const [rows, setRows] = useState<Row[]>([]);
-  const [final, setFinal] = useState<Row[]>([]);
+export function RankAct({ query }: { query: Query | null }) {
+  const [vectorRows, setVectorRows] = useState<Row[]>([]);
+  const [rankedRows, setRankedRows] = useState<Row[]>([]);
+  const [showRanked, setShowRanked] = useState(false);
   const [rerankMs, setRerankMs] = useState<number | null>(null);
   const [searchMs, setSearchMs] = useState<number | null>(null);
-  const [failed, setFailed] = useState(false);
   const ticketRef = useRef(0);
-
-  const query = queries.length > 0 ? queries[idx % queries.length] : null;
 
   useEffect(() => {
     if (!query) return;
     const ticket = ++ticketRef.current;
     let cancelled = false;
-    setStage("searching");
-    setRows([]);
-    setFinal([]);
+    const live = () => !cancelled && ticket === ticketRef.current;
+
+    setShowRanked(false);
+    setRankedRows([]);
     setRerankMs(null);
-    setSearchMs(null);
-    setFailed(false);
 
     (async () => {
       try {
@@ -98,216 +77,112 @@ export function RankAct() {
           results?: Array<{ hits: Hit[]; serverTimeMs: number | null }>;
         };
         const hits = d.results?.[0]?.hits ?? [];
-        if (cancelled || ticket !== ticketRef.current) return;
-        if (hits.length === 0) {
-          setFailed(true);
-          return;
-        }
+        if (!live() || hits.length === 0) return;
+
         const candidates: Row[] = hits.map((h, i) => ({ ...h, vectorRank: i + 1 }));
         setSearchMs(d.results?.[0]?.serverTimeMs ?? null);
-        setRows(candidates.slice(0, SHOWN));
-        setStage("vector");
+        setVectorRows(candidates.slice(0, SHOWN));
 
         const t0 = performance.now();
         const scores = await rerankPairs(
           query.text,
           candidates.map((c) => (c.payload.description ?? c.payload.title).slice(0, 500)),
         );
-        if (cancelled || ticket !== ticketRef.current) return;
+        if (!live()) return;
         const scored = candidates
           .map((c, i) => ({ ...c, ce: sigmoid(scores[i] ?? -20) }))
           .sort((a, b) => (b.ce ?? 0) - (a.ce ?? 0))
           .slice(0, SHOWN);
         setRerankMs(Math.round(performance.now() - t0));
-        setFinal(scored);
-        // Let the vector order be read before anything moves.
-        setTimeout(() => {
-          if (!cancelled && ticket === ticketRef.current) setStage("reranked");
-        }, SETTLE_MS);
+        setRankedRows(scored);
+        // Let the first order be read before anything moves.
+        setTimeout(() => { if (live()) setShowRanked(true); }, SETTLE_MS);
       } catch {
-        if (!cancelled && ticket === ticketRef.current) setFailed(true);
+        /* the band keeps showing vector order; the loop moves on regardless */
       }
     })();
 
     return () => { cancelled = true; };
   }, [query]);
 
-  // Advance when the run has finished, not on a fixed clock: the old version
-  // could swap in the next query while the previous one was still animating,
-  // which put two different queries in the two rows at once.
-  useEffect(() => {
-    if (queries.length < 2) return;
-    if (stage !== "reranked" && !failed) return;
-    const t = setTimeout(() => setIdx((i) => i + 1), failed ? 4000 : HOLD_MS);
-    return () => clearTimeout(t);
-  }, [stage, failed, queries.length]);
-
-  // Watchdog: a cross-encoder that never resolves must not stall the loop.
-  useEffect(() => {
-    if (queries.length < 2) return;
-    const t = setTimeout(() => setIdx((i) => i + 1), 40_000);
-    return () => clearTimeout(t);
-  }, [idx, queries.length]);
-
-  const lower: Row[] = stage === "reranked" && final.length > 0 ? final : rows;
-  const movers = stage === "reranked"
-    ? final.filter((f) => f.vectorRank > SHOWN).length
-    : 0;
+  const rows = showRanked && rankedRows.length > 0 ? rankedRows : vectorRows;
+  const movers = showRanked ? rankedRows.filter((r) => r.vectorRank > SHOWN).length : 0;
 
   return (
-    <div className="flex h-full flex-col px-10 pb-8 pt-6">
-      <div className="shrink-0 text-center">
-        <div className="eyebrow mb-3">Two scorers, same films, different answers</div>
-        <AnimatePresence mode="wait">
-          <motion.div
-            key={query?.text ?? "none"}
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -8 }}
-            transition={{ duration: 0.35 }}
-            className="font-semibold tracking-tight-brand text-fg-primary"
-            style={{ fontSize: "clamp(1.5rem, 2.6vw, 2.5rem)", lineHeight: 1.15 }}
-          >
-            &ldquo;{query?.text ?? "loading"}&rdquo;
-          </motion.div>
-        </AnimatePresence>
-      </div>
-
-      <div className="mt-6 flex min-h-0 flex-1 flex-col justify-center gap-6">
-        <RankRow
-          label="Vector search"
-          sub={
-            stage === "searching"
-              ? "searching…"
-              : `${searchMs == null ? "" : `${searchMs < 1 ? "<1" : searchMs.toFixed(1)} ms · `}compares angles`
-          }
-          accent="#6047FF"
-          rows={rows}
-          showCe={false}
-          queryKey={query?.text ?? ""}
-          dim={stage === "reranked"}
-        />
-
-        <RankRow
-          label="After re-ranking"
-          sub={
-            stage === "reranked"
-              ? `${rerankMs == null ? "" : `${(rerankMs / 1000).toFixed(1)} s · `}reads every plot`
-              : "reading all 18 candidates…"
-          }
-          accent="#DC244C"
-          rows={lower}
-          showCe={stage === "reranked"}
-          queryKey={query?.text ?? ""}
-          highlight={stage === "reranked"}
-        />
-      </div>
-
-      <div className="mt-5 shrink-0 text-center text-[0.875rem] text-fg-secondary">
-        {failed ? (
-          <span className="text-fg-primary/80">Could not finish this one. Moving on.</span>
-        ) : stage === "reranked" ? (
-          <>
-            Cheap search shortlists <span className="text-fg-primary/85">{CANDIDATES}</span>.
-            An expensive model reorders them
-            {movers > 0 && (
-              <>
-                , pulling <span className="text-fg-primary/85">{movers}</span> up from outside
-                the top {SHOWN}
-              </>
-            )}
-            .
-          </>
-        ) : (
-          <>Cheap search finds candidates. An expensive model decides the order.</>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function RankRow({
-  label, sub, accent, rows, showCe, queryKey, dim = false, highlight = false,
-}: {
-  label: string;
-  sub: string;
-  accent: string;
-  rows: Row[];
-  showCe: boolean;
-  /** Remounts the presence tree per query so nothing survives across runs. */
-  queryKey: string;
-  dim?: boolean;
-  highlight?: boolean;
-}) {
-  return (
-    <div
-      className="rounded-xl p-5 ring-1 transition-all duration-500"
-      style={{
-        background: highlight ? "rgba(220,36,76,0.07)" : "rgba(255,255,255,0.02)",
-        boxShadow: `inset 0 0 0 1px ${highlight ? "rgba(220,36,76,0.3)" : "rgba(255,255,255,0.06)"}`,
-        opacity: dim ? 0.55 : 1,
-      }}
-    >
-      <div className="mb-3 flex items-baseline gap-3">
+    <div className="flex h-full flex-col rounded-xl bg-white/[0.02] px-5 py-3 ring-1 ring-white/[0.06]">
+      <div className="mb-2 flex shrink-0 items-baseline gap-3">
         <span
           className="font-semibold tracking-tight-brand"
-          style={{ fontSize: "clamp(1rem, 1.3vw, 1.3rem)", color: accent }}
+          style={{
+            fontSize: "clamp(0.95rem, 1.25vw, 1.25rem)",
+            color: showRanked ? "#DC244C" : "#6047FF",
+          }}
         >
-          {label}
+          {showRanked ? "Re-ranked" : "The answers"}
         </span>
-        <span className="text-[0.8125rem] text-fg-secondary">{sub}</span>
+        <span className="truncate text-[0.8125rem] text-fg-secondary">
+          {showRanked
+            ? `${rerankMs == null ? "" : `${(rerankMs / 1000).toFixed(1)} s · `}a model read all ${CANDIDATES} properly${
+                movers > 0 ? ` and pulled ${movers} up from outside the top ${SHOWN}` : ""
+              }`
+            : `${searchMs == null ? "" : `${searchMs < 1 ? "<1" : searchMs.toFixed(1)} ms · `}closest by angle`}
+        </span>
       </div>
 
       <div
-        key={queryKey}
-        className="grid gap-3"
+        key={query?.text ?? "none"}
+        className="grid min-h-0 flex-1 gap-3"
         style={{ gridTemplateColumns: `repeat(${SHOWN}, 1fr)` }}
       >
         <AnimatePresence mode="popLayout" initial={false}>
           {rows.map((r, i) => {
-            const moved = showCe ? r.vectorRank - (i + 1) : 0;
-            const fromDeep = showCe && r.vectorRank > SHOWN;
+            const moved = showRanked ? r.vectorRank - (i + 1) : 0;
+            const fromDeep = showRanked && r.vectorRank > SHOWN;
+            const hue = r.payload.hue ?? 320;
             return (
               <motion.div
                 key={r.id}
                 layout
-                initial={{ opacity: 0, y: 18, scale: 0.94 }}
+                initial={{ opacity: 0, y: 16, scale: 0.94 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: -14, scale: 0.94 }}
+                exit={{ opacity: 0, y: -12, scale: 0.94 }}
                 transition={{ type: "spring", stiffness: 260, damping: 26, mass: 0.7 }}
-                className="flex min-w-0 items-center gap-2.5 rounded-lg bg-black/30 p-2.5"
+                className="flex min-w-0 items-center gap-2.5 rounded-lg bg-black/30 p-2"
               >
                 <div
-                  className="h-14 w-10 shrink-0 overflow-hidden rounded"
+                  className="h-full w-[3.5vw] max-w-[3rem] shrink-0 overflow-hidden rounded"
                   style={{
                     background: r.payload.poster
                       ? `url(${posterSrc(r.payload.poster)}) center/cover`
-                      : `linear-gradient(140deg, hsl(${r.payload.hue ?? 320} 55% 28%), hsl(${(r.payload.hue ?? 320) + 40} 45% 16%))`,
+                      : `linear-gradient(140deg, hsl(${hue} 55% 28%), hsl(${hue + 40} 45% 16%))`,
                   }}
                 />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-baseline gap-1.5">
-                    <span className="font-mono text-[0.75rem] text-fg-secondary">#{i + 1}</span>
+                    <span className="font-mono text-[0.7rem] text-fg-secondary">#{i + 1}</span>
                     <span
                       className="font-semibold tabular-nums"
-                      style={{ fontSize: "clamp(0.875rem, 1.05vw, 1.1rem)", color: accent }}
+                      style={{
+                        fontSize: "clamp(0.85rem, 1vw, 1.05rem)",
+                        color: showRanked ? "#DC244C" : "#6047FF",
+                      }}
                     >
-                      {showCe && r.ce != null ? r.ce.toFixed(2) : r.score.toFixed(2)}
+                      {showRanked && r.ce != null ? r.ce.toFixed(2) : r.score.toFixed(2)}
                     </span>
                   </div>
                   <div className="line-clamp-2 text-[0.8125rem] font-medium leading-tight text-fg-primary">
                     {r.payload.title}
                   </div>
-                  {showCe && (
-                    <div className="text-[0.75rem] text-fg-secondary">
+                  {showRanked && (
+                    <div className="truncate text-[0.7rem] text-fg-secondary">
                       {fromDeep ? (
-                        <span style={{ color: accent }}>was #{r.vectorRank}</span>
+                        <span style={{ color: "#DC244C" }}>was #{r.vectorRank}</span>
                       ) : moved > 0 ? (
-                        <span style={{ color: "#4CAF50" }}>up {moved} from #{r.vectorRank}</span>
+                        <span style={{ color: "#4CAF50" }}>up {moved}</span>
                       ) : moved < 0 ? (
-                        <span>down {-moved} from #{r.vectorRank}</span>
+                        <span>down {-moved}</span>
                       ) : (
-                        <span className="text-fg-secondary/60">held #{r.vectorRank}</span>
+                        <span className="text-fg-secondary/60">held</span>
                       )}
                     </div>
                   )}
