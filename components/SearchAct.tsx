@@ -36,7 +36,21 @@ interface ApiResult {
   arms: string[];
 }
 
+/**
+ * Hybrid leads.
+ *
+ * It used to sit last, read as the sum of the three before it. But it is the
+ * one thing here that is Qdrant rather than vector search in general: a single
+ * request, three retrieval methods, fused inside the database. The three arms
+ * follow as the breakdown, which is the order the story actually goes in.
+ */
 const COLUMNS: Array<{ key: ModeKey; title: string; lead: string; accent: string }> = [
+  {
+    key: "hybrid",
+    title: "All three, fused",
+    lead: "One request. Qdrant runs and merges them",
+    accent: "#DC244C",
+  },
   {
     key: "bm25",
     title: "Keywords",
@@ -54,12 +68,6 @@ const COLUMNS: Array<{ key: ModeKey; title: string; lead: string; accent: string
     title: "Meaning",
     lead: "What the sentence means",
     accent: "#6047FF",
-  },
-  {
-    key: "hybrid",
-    title: "All three, fused",
-    lead: "All three, merged by Qdrant",
-    accent: "#DC244C",
   },
 ];
 

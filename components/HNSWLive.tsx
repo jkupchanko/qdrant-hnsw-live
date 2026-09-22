@@ -12,6 +12,7 @@ import { embedText, rerankPairs } from "@/lib/embed";
 import { posterSrc } from "@/lib/poster";
 import { SearchAct } from "./SearchAct";
 import { RankAct } from "./RankAct";
+import { MeasureAct } from "./MeasureAct";
 
 const REPO_URL = "https://github.com/jkupchanko/qdrant-hnsw-live";
 
@@ -27,7 +28,7 @@ const REPO_URL = "https://github.com/jkupchanko/qdrant-hnsw-live";
  */
 
 type Phase = "typing" | "encoding" | "walking" | "results" | "hold" | "clearing";
-type Tab = "demo" | "search" | "rank" | "inside" | "compare";
+type Tab = "demo" | "search" | "measure" | "rank" | "inside" | "compare";
 
 const WALK_MS = 2600;
 const RESULTS_MS = 800;
@@ -250,8 +251,11 @@ export function HNSWLive({ mode = "screens" }: { mode?: "screens" | "board" }) {
     if (!rotating) return;
     if (board) return;
     const dwell: Record<Tab, number> = {
-      demo: 75_000, search: 50_000, rank: 50_000, inside: 0, compare: 0,
+      demo: 70_000, search: 50_000, measure: 45_000, rank: 50_000, inside: 0, compare: 0,
     };
+    // "measure" is built but out of the loop on purpose — see MeasureAct:
+    // every vector here is unit length, so cosine, dot and Euclidean rank
+    // identically. The screen worked and proved there was nothing to show.
     const order: Tab[] = ["demo", "search", "rank"];
     const t = setTimeout(() => {
       setTab((cur) => order[(order.indexOf(cur) + 1) % order.length]);
@@ -1684,6 +1688,13 @@ export function HNSWLive({ mode = "screens" }: { mode?: "screens" | "board" }) {
       {/* ACT FOUR — ranking, and the two scorers disagreeing. */}
       <main className={`flex-1 min-h-0 ${tab === "rank" ? "block" : "hidden"}`}>
         <RankAct />
+      </main>
+
+      {/* HOW WE MEASURE — same query, three distance metrics, three real
+          collections. Distance is build-time in Qdrant, so this is only
+          possible because the variants exist. */}
+      <main className={`flex-1 min-h-0 ${tab === "measure" ? "block" : "hidden"}`}>
+        <MeasureAct query={queries[qIdx] ?? null} />
       </main>
 
       {/* ACT TWO — the retrieval methods, raced against each other. */}
