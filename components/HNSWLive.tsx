@@ -13,6 +13,7 @@ import { posterSrc } from "@/lib/poster";
 import { SearchAct } from "./SearchAct";
 import { RankAct } from "./RankAct";
 import { MeasureAct } from "./MeasureAct";
+import { FilterAct } from "./FilterAct";
 
 const REPO_URL = "https://github.com/jkupchanko/qdrant-hnsw-live";
 
@@ -28,7 +29,7 @@ const REPO_URL = "https://github.com/jkupchanko/qdrant-hnsw-live";
  */
 
 type Phase = "typing" | "encoding" | "walking" | "results" | "hold" | "clearing";
-type Tab = "demo" | "search" | "measure" | "rank" | "inside" | "compare";
+type Tab = "demo" | "search" | "filter" | "measure" | "rank" | "inside" | "compare";
 
 const WALK_MS = 2600;
 const RESULTS_MS = 800;
@@ -251,12 +252,13 @@ export function HNSWLive({ mode = "screens" }: { mode?: "screens" | "board" }) {
     if (!rotating) return;
     if (board) return;
     const dwell: Record<Tab, number> = {
-      demo: 70_000, search: 50_000, measure: 45_000, rank: 50_000, inside: 0, compare: 0,
+      demo: 70_000, search: 50_000, filter: 45_000, measure: 45_000, rank: 50_000,
+      inside: 0, compare: 0,
     };
     // "measure" is built but out of the loop on purpose — see MeasureAct:
     // every vector here is unit length, so cosine, dot and Euclidean rank
     // identically. The screen worked and proved there was nothing to show.
-    const order: Tab[] = ["demo", "search", "rank"];
+    const order: Tab[] = ["demo", "search", "filter", "rank"];
     const t = setTimeout(() => {
       setTab((cur) => order[(order.indexOf(cur) + 1) % order.length]);
     }, dwell[tab] * dwellScale);
@@ -477,6 +479,20 @@ export function HNSWLive({ mode = "screens" }: { mode?: "screens" | "board" }) {
   }, []);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const boardRef = useRef<HTMLDivElement | null>(null);
+  /**
+   * Where the question lands on the map.
+   *
+   * The screen showed the map and, separately, the query turning into 384
+   * numbers, and never joined the two — so nobody could see a sentence
+   * *become* a point, which is the whole idea of an embedding.
+   *
+   * Honest about what this is: the exact PCA projection of an arbitrary query
+   * is not available in the browser, so the dot lands on the nearest match's
+   * position, which is where the query sits to within one neighbour. The
+   * caption says "lands beside its nearest match" rather than claiming the
+   * projection is exact.
+   */
+  const [landing, setLanding] = useState<{ x: number; y: number; color: string } | null>(null);
 
   /**
    * The board drifts.
@@ -686,6 +702,7 @@ export function HNSWLive({ mode = "screens" }: { mode?: "screens" | "board" }) {
               path: simulatePath(origin, currentEf, pointsRef.current),
               bornAt: performance.now(),
             };
+            setLanding({ x: origin.tx, y: origin.ty, color: GENRE_COLOR[hyb[0].payload.genres[0]] ?? "#DC244C" });
           }
           commitResult({
             text: current.text, hits: hyb,
@@ -840,6 +857,7 @@ export function HNSWLive({ mode = "screens" }: { mode?: "screens" | "board" }) {
             path: simulatePath(origin, currentEf, pointsRef.current),
             bornAt: performance.now(),
           };
+          setLanding({ x: origin.tx, y: origin.ty, color: GENRE_COLOR[hits[0].payload.genres[0]] ?? "#DC244C" });
         }
         const wait = Math.max(0, MIN_ENCODE_MS - (performance.now() - started));
         const advance = () => {
@@ -876,6 +894,7 @@ export function HNSWLive({ mode = "screens" }: { mode?: "screens" | "board" }) {
 
   useEffect(() => {
     if (phase !== "clearing") return;
+    setLanding(null);
     const t = setTimeout(async () => {
       probeRef.current = null;
       setTyped("");
@@ -1031,7 +1050,7 @@ export function HNSWLive({ mode = "screens" }: { mode?: "screens" | "board" }) {
             menu with four things missing. */}
         {!board && (
           <div className="flex shrink-0 items-center gap-2">
-            {(["demo", "search", "rank"] as Tab[]).map((t) => (
+            {(["demo", "search", "filter", "rank"] as Tab[]).map((t) => (
               <span
                 key={t}
                 className="block rounded-full transition-all duration-500"
@@ -1467,6 +1486,39 @@ export function HNSWLive({ mode = "screens" }: { mode?: "screens" | "board" }) {
             )}
           </AnimatePresence>
 
+          {/* THE LANDING — the sentence arriving on the map as one point.
+              Without this the embed act showed a map and, separately, some
+              numbers, and never joined them. */}
+          <AnimatePresence>
+            {phase === "walking" && landing && (
+              <motion.div
+                key="landing"
+                className="pointer-events-none absolute z-[6]"
+                initial={{ left: "50%", top: "18%", opacity: 0, scale: 0.4 }}
+                animate={{ left: landing.x, top: landing.y, opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 1.6 }}
+                transition={{ type: "spring", stiffness: 90, damping: 18, mass: 0.9 }}
+              >
+                <div className="relative -translate-x-1/2 -translate-y-1/2">
+                  <span
+                    className="block h-3 w-3 rounded-full"
+                    style={{ background: "#fff", boxShadow: `0 0 0 0.35rem ${hexA(landing.color, 0.35)}, 0 0 1.5rem ${landing.color}` }}
+                  />
+                  <motion.span
+                    className="absolute left-1/2 top-1/2 block rounded-full"
+                    style={{ border: `2px solid ${landing.color}`, translateX: "-50%", translateY: "-50%" }}
+                    initial={{ width: 8, height: 8, opacity: 0.9 }}
+                    animate={{ width: 96, height: 96, opacity: 0 }}
+                    transition={{ duration: 1.4, delay: 0.55, repeat: Infinity, repeatDelay: 0.6 }}
+                  />
+                  <span className="absolute left-1/2 top-4 -translate-x-1/2 whitespace-nowrap rounded bg-bg-base/90 px-2 py-0.5 text-[0.75rem] text-fg-primary/90">
+                    your question, as a point
+                  </span>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
           {/* GENRE ANCHORS — drawn at measured centroids, not decoration.
               Held through the walk too, so the path has somewhere to be. */}
           <AnimatePresence>
@@ -1688,6 +1740,11 @@ export function HNSWLive({ mode = "screens" }: { mode?: "screens" | "board" }) {
       {/* ACT FOUR — ranking, and the two scorers disagreeing. */}
       <main className={`flex-1 min-h-0 ${tab === "rank" ? "block" : "hidden"}`}>
         <RankAct />
+      </main>
+
+      {/* NARROWING IT DOWN — filters, and the clock refusing to move. */}
+      <main className={`flex-1 min-h-0 ${tab === "filter" ? "block" : "hidden"}`}>
+        <FilterAct query={queries[qIdx] ?? null} cycle={cycle} />
       </main>
 
       {/* HOW WE MEASURE — same query, three distance metrics, three real
