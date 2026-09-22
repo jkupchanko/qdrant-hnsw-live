@@ -27,10 +27,12 @@ import { motion, AnimatePresence } from "framer-motion";
  * the screen means anything.
  */
 
-const BEATS = [0, 1300, 2700, 4600] as const;
+const BEATS = [0, 1200, 2500, 5300] as const;
 const SHOWN_DIMS = 48;
 
-export function EmbedStage({ text, vector }: { text: string; vector: number[] }) {
+export function EmbedStage({
+  text, vector, onCollapsed,
+}: { text: string; vector: number[]; onCollapsed?: () => void }) {
   const [beat, setBeat] = useState(0);
 
   useEffect(() => {
@@ -40,6 +42,12 @@ export function EmbedStage({ text, vector }: { text: string; vector: number[] })
     );
     return () => timers.forEach(clearTimeout);
   }, [text]);
+
+  // The dot itself belongs to the parent so it can outlive this stage and
+  // fly to the map. All this does is say when it should appear.
+  useEffect(() => {
+    if (beat === 3) onCollapsed?.();
+  }, [beat, onCollapsed]);
 
   const words = useMemo(() => text.split(/\s+/).filter(Boolean), [text]);
   // Evenly sampled real dimensions, so the numbers on screen are this query's.
@@ -56,13 +64,15 @@ export function EmbedStage({ text, vector }: { text: string; vector: number[] })
     <motion.div
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
+      // Slower out than in: the scrim lifting is what reveals the map under
+      // the point, and snapping it off was most of the "finicky" feeling.
+      exit={{ opacity: 0, transition: { duration: 0.75 } }}
       transition={{ duration: 0.35 }}
       // Inline rgba rather than a Tailwind opacity modifier on a CSS-variable
       // colour: the utility did not actually dim the map, so the numbers were
       // read against 19,907 moving dots.
       style={{ background: "rgba(9,12,20,0.965)", backdropFilter: "blur(6px)" }}
-      className="absolute inset-0 z-[8] flex flex-col items-center justify-center px-12 text-center"
+      className="absolute inset-0 z-[8] flex flex-col items-center justify-center px-12 pb-6 pt-24 text-center"
     >
       <div className="eyebrow mb-6">
         {beat < 2
@@ -100,61 +110,68 @@ export function EmbedStage({ text, vector }: { text: string; vector: number[] })
         )}
       </AnimatePresence>
 
-      {/* 3: the actual vector, arriving */}
+      {/* 3: the actual vector, arriving.
+          Fixed-width monospace cells on a faint plate: unstyled floats of
+          varying length jitter the grid as they land, which looked like a
+          rendering fault rather than data. */}
       <AnimatePresence>
         {beat === 2 && (
           <motion.div
             key="numbers"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0, scale: 0.2, filter: "blur(6px)" }}
-            // Let the words clear before the numbers arrive, or the two sit
-            // on top of each other and the handover reads as a glitch.
-            transition={{ duration: 0.5, delay: 0.3 }}
-            className="grid max-w-[68vw] gap-x-5 gap-y-1.5 font-mono"
-            style={{ gridTemplateColumns: `repeat(8, minmax(0, 1fr))` }}
+            // Deliberately plain. The previous version animated opacity,
+            // scale AND filter on this container and the opacity stuck at
+            // 0.0043 — measured, never moved, so the grid was invisible while
+            // its own cells animated in correctly underneath. The cells carry
+            // the entrance; the container only has to collapse on the way out.
+            initial={false}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.08 }}
+            transition={{ duration: 0.5 }}
+            className="flex flex-col items-center"
           >
-            {dims.map(({ d, v }, i) => (
-              <motion.span
-                key={d}
-                initial={{ opacity: 0, y: 6 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: i * 0.018, duration: 0.25 }}
-                className="tabular-nums"
-                style={{
-                  fontSize: "clamp(0.75rem, 1.05vw, 1.05rem)",
-                  color: v >= 0 ? "#FF8792" : "#6047FF",
-                }}
-              >
-                {v >= 0 ? "+" : ""}
-                {v.toFixed(3)}
-              </motion.span>
-            ))}
+            <div
+              className="grid gap-1.5"
+              style={{ gridTemplateColumns: "repeat(8, minmax(0, 1fr))" }}
+            >
+              {dims.map(({ d, v }, i) => (
+                <motion.span
+                  key={d}
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: i * 0.011, duration: 0.2 }}
+                  className="rounded-md bg-white/[0.04] px-2.5 py-1.5 text-center font-mono tabular-nums ring-1 ring-white/[0.05]"
+                  style={{
+                    fontSize: "clamp(0.7rem, 0.95vw, 0.95rem)",
+                    color: v >= 0 ? "#FF8792" : "#8E9BFF",
+                    minWidth: "5.2ch",
+                  }}
+                >
+                  {v >= 0 ? "+" : "\u2212"}
+                  {Math.abs(v).toFixed(3)}
+                </motion.span>
+              ))}
+            </div>
+            <div className="mt-4 font-mono text-[0.75rem] text-fg-secondary">
+              showing {SHOWN_DIMS} of {vector.length}
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* 4: all of it, collapsed to one point */}
+      {/* 4: the caption only. The point is the parent's, so that the same
+          element can carry on and land on the map. */}
       <AnimatePresence>
         {beat === 3 && (
           <motion.div
-            key="point"
-            initial={{ scale: 0.2, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
+            key="point-caption"
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0 }}
-            transition={{ type: "spring", stiffness: 140, damping: 14 }}
-            className="flex flex-col items-center"
+            transition={{ delay: 0.35, duration: 0.45 }}
+            className="mt-24 font-semibold tracking-tight-brand text-fg-primary"
+            style={{ fontSize: "clamp(1.1rem, 1.7vw, 1.7rem)" }}
           >
-            <span
-              className="block h-4 w-4 rounded-full bg-white"
-              style={{ boxShadow: "0 0 0 0.5rem rgba(220,36,76,0.28), 0 0 3rem #DC244C" }}
-            />
-            <div
-              className="mt-6 font-semibold tracking-tight-brand text-fg-primary"
-              style={{ fontSize: "clamp(1.1rem, 1.7vw, 1.7rem)" }}
-            >
-              384 numbers are one position
-            </div>
+            384 numbers are one position
           </motion.div>
         )}
       </AnimatePresence>

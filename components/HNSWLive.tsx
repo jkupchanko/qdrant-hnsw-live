@@ -38,7 +38,7 @@ const HOLD_MS = 9000; // a passer-by's glance is 3-10s; the old 5.2s wiped befor
 const HOLD_CUSTOM_MS = 16000; // a visitor's own search deserves a longer look
 const CLEAR_MS = 400;
 const TYPE_CHAR_MS = 42;
-const MIN_ENCODE_MS = 6800; // the embed sequence is four beats; cutting it short skips the point // hold the embed step long enough to register
+const MIN_ENCODE_MS = 7600; // the embed sequence is four beats; cutting it short skips the point // hold the embed step long enough to register
 
 const EF_CYCLE = [16, 64, 128, 512] as const;
 const CYCLES_PER_EF = 2;
@@ -546,6 +546,19 @@ export function HNSWLive({ mode = "screens" }: { mode?: "screens" | "board" }) {
    * projection is exact.
    */
   const [landing, setLanding] = useState<{ x: number; y: number; color: string } | null>(null);
+  /** Map pixel size, so the dot can start dead centre in the same units. */
+  const [mapSize, setMapSize] = useState<{ w: number; h: number } | null>(null);
+  /**
+   * The query dot is ONE element, owned here rather than by EmbedStage.
+   *
+   * It used to be two: a dot that appeared at the end of the embed sequence,
+   * and a different dot that flew onto the map once the walk began. The first
+   * unmounted as the second mounted, so what should read as "the sentence
+   * travels to its place" read as a flicker and a pop. Keeping one element
+   * mounted across both phases lets framer-motion tween the position, which
+   * is the whole effect.
+   */
+  const [dotOut, setDotOut] = useState(false);
 
   /**
    * The board drifts.
@@ -660,6 +673,7 @@ export function HNSWLive({ mode = "screens" }: { mode?: "screens" | "board" }) {
         .filter((a) => a.sep >= 0.55)
         .sort((a, b) => b.sep - a.sep);
       setGenreAnchors(anchors);
+      setMapSize({ w: cw, h: ch });
     }
 
     const idx = new Map<number, Point>();
@@ -948,6 +962,7 @@ export function HNSWLive({ mode = "screens" }: { mode?: "screens" | "board" }) {
   useEffect(() => {
     if (phase !== "clearing") return;
     setLanding(null);
+    setDotOut(false);
     const t = setTimeout(async () => {
       probeRef.current = null;
       setTyped("");
@@ -1508,38 +1523,70 @@ export function HNSWLive({ mode = "screens" }: { mode?: "screens" | "board" }) {
               the map. See EmbedStage for why this is not the map any more. */}
           <AnimatePresence>
             {phase === "encoding" && current && (
-              <EmbedStage key="embed" text={current.text} vector={current.vector} />
+              <EmbedStage
+                key="embed"
+                text={current.text}
+                vector={current.vector}
+                onCollapsed={() => setDotOut(true)}
+              />
             )}
           </AnimatePresence>
 
-          {/* THE LANDING — the sentence arriving on the map as one point.
-              Without this the embed act showed a map and, separately, some
-              numbers, and never joined them. */}
+          {/* THE QUERY DOT — one element, two destinations.
+              Centre of the map while the embed sequence collapses onto it,
+              then the nearest match's position once the walk starts. Because
+              it never unmounts, the move is a tween rather than a swap. */}
           <AnimatePresence>
-            {phase === "walking" && landing && (
+            {dotOut && (phase === "encoding" || phase === "walking") && mapSize && (
               <motion.div
-                key="landing"
-                className="pointer-events-none absolute z-[6]"
-                initial={{ left: "50%", top: "18%", opacity: 0, scale: 0.4 }}
-                animate={{ left: landing.x, top: landing.y, opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 1.6 }}
-                transition={{ type: "spring", stiffness: 90, damping: 18, mass: 0.9 }}
+                key="querydot"
+                className="pointer-events-none absolute z-[9]"
+                style={{ left: 0, top: 0 }}
+                initial={{ x: mapSize.w / 2, y: mapSize.h / 2, opacity: 0, scale: 0.3 }}
+                animate={{
+                  x: phase === "walking" && landing ? landing.x : mapSize.w / 2,
+                  y: phase === "walking" && landing ? landing.y : mapSize.h / 2,
+                  opacity: 1,
+                  scale: 1,
+                }}
+                exit={{ opacity: 0, scale: 1.8 }}
+                transition={{
+                  x: { type: "spring", stiffness: 70, damping: 17, mass: 1.1 },
+                  y: { type: "spring", stiffness: 70, damping: 17, mass: 1.1 },
+                  opacity: { duration: 0.4 },
+                  scale: { type: "spring", stiffness: 180, damping: 14 },
+                }}
               >
                 <div className="relative -translate-x-1/2 -translate-y-1/2">
                   <span
-                    className="block h-3 w-3 rounded-full"
-                    style={{ background: "#fff", boxShadow: `0 0 0 0.35rem ${hexA(landing.color, 0.35)}, 0 0 1.5rem ${landing.color}` }}
+                    className="block h-3.5 w-3.5 rounded-full bg-white"
+                    style={{
+                      boxShadow: `0 0 0 0.4rem ${hexA(landing?.color ?? "#DC244C", 0.3)}, 0 0 2rem ${landing?.color ?? "#DC244C"}`,
+                    }}
                   />
                   <motion.span
                     className="absolute left-1/2 top-1/2 block rounded-full"
-                    style={{ border: `2px solid ${landing.color}`, translateX: "-50%", translateY: "-50%" }}
-                    initial={{ width: 8, height: 8, opacity: 0.9 }}
-                    animate={{ width: 96, height: 96, opacity: 0 }}
-                    transition={{ duration: 1.4, delay: 0.55, repeat: Infinity, repeatDelay: 0.6 }}
+                    style={{
+                      border: `2px solid ${landing?.color ?? "#DC244C"}`,
+                      translateX: "-50%",
+                      translateY: "-50%",
+                    }}
+                    initial={{ width: 10, height: 10, opacity: 0.85 }}
+                    animate={{ width: 104, height: 104, opacity: 0 }}
+                    transition={{ duration: 1.6, repeat: Infinity, repeatDelay: 0.5 }}
                   />
-                  <span className="absolute left-1/2 top-4 -translate-x-1/2 whitespace-nowrap rounded bg-bg-base/90 px-2 py-0.5 text-[0.75rem] text-fg-primary/90">
-                    your question, as a point
-                  </span>
+                  <AnimatePresence>
+                    {phase === "walking" && (
+                      <motion.span
+                        initial={{ opacity: 0, y: -4 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: 0.5 }}
+                        className="absolute left-1/2 top-5 -translate-x-1/2 whitespace-nowrap rounded bg-bg-base/90 px-2 py-0.5 text-[0.75rem] text-fg-primary/90"
+                      >
+                        your question, as a point
+                      </motion.span>
+                    )}
+                  </AnimatePresence>
                 </div>
               </motion.div>
             )}
@@ -2487,7 +2534,7 @@ function StepRail({ phase, reranking }: { phase: Phase; reranking: boolean }) {
               </span>
             </div>
             {i < steps.length - 1 && (
-              <span className="relative mx-3 h-[2px] w-[2.5vw] overflow-hidden rounded-full bg-white/10">
+              <span className="relative mx-2 h-[2px] w-[1.6vw] overflow-hidden rounded-full bg-white/10">
                 <span
                   className="absolute inset-y-0 left-0 rounded-full transition-all duration-700 ease-out"
                   style={{ width: done ? "100%" : "0%", background: "#DC244C" }}
