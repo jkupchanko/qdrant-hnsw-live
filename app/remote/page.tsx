@@ -28,6 +28,59 @@ const STAGES = [
  * The phone side of the QR hand-off: type a query, optionally tune the
  * search, watch staged progress, and get a summary of what happened.
  */
+/**
+ * Pill, Section and Field live outside the page component on purpose: they
+ * were redefined on every render, which remounts every control and loses
+ * focus and transitions mid-interaction.
+ *
+ * Sizing follows the phone, not the desktop: a pill is ~40px tall so it is
+ * a real tap target, and the grid wraps rather than scrolling sideways.
+ */
+function Pill({
+  active, onClick, children,
+}: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-full px-3.5 py-2 text-[13px] font-medium leading-none transition-all ${
+        active
+          ? "bg-qdrant-red text-white shadow-[0_0_0_1px_rgba(220,36,76,0.5)]"
+          : "bg-white/[0.05] text-fg-disabled ring-1 ring-white/[0.08] active:bg-white/[0.1]"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="border-t border-white/[0.07] pt-4 first:border-0 first:pt-0">
+      <div className="mb-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-fg-secondary">
+        {title}
+      </div>
+      <div className="space-y-4">{children}</div>
+    </div>
+  );
+}
+
+function Field({
+  label, value, note, children,
+}: { label: string; value?: string; note?: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <div className="mb-2 flex items-baseline justify-between gap-3">
+        <span className="text-[13px] font-medium text-fg-primary">{label}</span>
+        {value && <span className="font-mono text-[11px] text-fg-secondary">{value}</span>}
+      </div>
+      <div className="flex flex-wrap gap-1.5">{children}</div>
+      {note && <div className="mt-2 text-[11px] leading-snug text-fg-secondary">{note}</div>}
+    </div>
+  );
+}
+
+
 export default function RemotePage() {
   const [text, setText] = useState("");
   const [phase, setPhase] = useState<"idle" | "waiting" | "done" | "timeout" | "error">("idle");
@@ -113,24 +166,24 @@ export default function RemotePage() {
     }
   };
 
+  /** How many knobs are off their defaults - shown on the collapsed row. */
+  const tuned =
+    (ef != null ? 1 : 0) + (topK !== 6 ? 1 : 0) + (genre ? 1 : 0) + (rerank ? 1 : 0) +
+    (hybrid ? 1 : 0) + (distance !== "cosine" ? 1 : 0) + (m !== 16 ? 1 : 0) +
+    (exact ? 1 : 0) + (threshold != null ? 1 : 0) + (decade ? 1 : 0) + (tenant ? 1 : 0);
+
+  const resetOptions = () => {
+    setEf(null); setTopK(6); setGenre(null); setRerank(false); setHybrid(false);
+    setDistance("cosine"); setM(16); setExact(false); setThreshold(null);
+    setDecade(null); setTenant(null);
+  };
+
   const reset = () => {
     stopTimers();
     setPhase("idle");
     setSummary(null);
     setText("");
   };
-
-  const Pill = ({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) => (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`rounded px-2.5 py-1 text-[12px] font-medium transition-all ${
-        active ? "bg-qdrant-red text-white" : "bg-white/[0.06] text-fg-secondary"
-      }`}
-    >
-      {children}
-    </button>
-  );
 
   return (
     <div className="flex min-h-screen flex-col items-center px-5 py-8">
@@ -153,72 +206,71 @@ export default function RemotePage() {
               className="w-full rounded-lg bg-white/[0.05] ring-1 ring-white/[0.1] px-4 py-3.5 text-base text-fg-primary placeholder:text-fg-secondary/60 outline-none focus:ring-qdrant-red/60"
             />
 
-            {/* Options accordion */}
+            {/* Options - grouped, because eleven controls in one flat list
+                is a wall. Retrieval is what runs, Index is how it is stored
+                and walked, Filters are what gets excluded. */}
             <button
               type="button"
               onClick={() => setShowOptions((o) => !o)}
-              className="mt-3 w-full text-left text-[12px] text-fg-secondary flex items-center justify-between rounded-lg bg-white/[0.03] ring-1 ring-white/[0.06] px-3 py-2"
+              className="mt-3 flex w-full items-center justify-between rounded-xl bg-white/[0.04] px-4 py-3 text-left ring-1 ring-white/[0.08] active:bg-white/[0.07]"
             >
-              <span>Tune the search, optional</span>
-              <span className={`transition-transform ${showOptions ? "rotate-180" : ""}`}>▾</span>
+              <span className="text-[13px] font-medium text-fg-primary">Tune the search</span>
+              <span className="flex items-center gap-2 text-[11px] text-fg-secondary">
+                {tuned > 0 ? `${tuned} changed` : "defaults"}
+                <span className={`transition-transform ${showOptions ? "rotate-180" : ""}`}>&#9662;</span>
+              </span>
             </button>
+
             {showOptions && (
-              <div className="mt-2 space-y-3 rounded-lg bg-white/[0.03] ring-1 ring-white/[0.06] p-3 text-left">
-                <div>
-                  <div className="mb-1 text-[11px] text-fg-secondary">Accuracy (ef)</div>
-                  <div className="flex gap-1 flex-wrap">
+              <div className="mt-2 space-y-5 rounded-xl bg-bg-elev-1 p-4 text-left ring-1 ring-white/[0.08]">
+                <Section title="Retrieval">
+                  <Field label="Method" note="Hybrid fuses dense and keyword results inside Qdrant, in one request.">
+                    <Pill active={!hybrid} onClick={() => setHybrid(false)}>Dense only</Pill>
+                    <Pill active={hybrid} onClick={() => setHybrid(true)}>Hybrid RRF</Pill>
+                  </Field>
+                  <Field label="Re-rank" note="A cross-encoder re-reads the shortlist. Slower, better order.">
+                    <Pill active={!rerank} onClick={() => setRerank(false)}>Off</Pill>
+                    <Pill active={rerank} onClick={() => setRerank(true)}>On</Pill>
+                  </Field>
+                  <Field label="Results" value={`top ${topK}`}>
+                    {[3, 6, 12].map((k) => (
+                      <Pill key={k} active={topK === k} onClick={() => setTopK(k)}>{k}</Pill>
+                    ))}
+                  </Field>
+                </Section>
+
+                <Section title="Index">
+                  <Field
+                    label="Index"
+                    note="Exact checks all 19,907 vectors. Perfect recall, and the thing the index exists to avoid at scale."
+                  >
+                    <Pill active={!exact} onClick={() => setExact(false)}>HNSW graph</Pill>
+                    <Pill active={exact} onClick={() => setExact(true)}>Exact scan</Pill>
+                  </Field>
+                  <Field
+                    label="Accuracy"
+                    value={ef == null ? "ef auto" : `ef ${ef}`}
+                    note="How many candidates the graph walk keeps. Higher is more accurate and slower."
+                  >
                     <Pill active={ef == null} onClick={() => setEf(null)}>Auto</Pill>
                     {[16, 64, 128, 512].map((v) => (
                       <Pill key={v} active={ef === v} onClick={() => setEf(v)}>{v}</Pill>
                     ))}
-                  </div>
-                </div>
-                <div>
-                  <div className="mb-1 text-[11px] text-fg-secondary">Results</div>
-                  <div className="flex gap-1">
-                    {[3, 6, 12].map((k) => (
-                      <Pill key={k} active={topK === k} onClick={() => setTopK(k)}>{k}</Pill>
-                    ))}
-                  </div>
-                </div>
-                <div>
-                  <div className="mb-1 text-[11px] text-fg-secondary">Genre</div>
-                  <div className="flex gap-1 flex-wrap">
-                    <Pill active={genre == null} onClick={() => setGenre(null)}>All</Pill>
-                    {["drama", "sci-fi", "thriller", "comedy", "horror"].map((g) => (
-                      <Pill key={g} active={genre === g} onClick={() => setGenre(g)}>{g}</Pill>
-                    ))}
-                  </div>
-                </div>
-                <div>
-                  <div className="mb-1 text-[11px] text-fg-secondary">
-                    Distance metric
-                  </div>
-                  <div className="flex gap-1 flex-wrap">
+                  </Field>
+                  <Field
+                    label="Distance metric"
+                    value={distance}
+                    note="Cosine compares direction, dot product direction and magnitude, Euclidean straight-line distance. Every vector here is unit length, so all three rank identically - which is the lesson: normalise, and the choice stops mattering."
+                  >
                     <Pill active={distance === "cosine"} onClick={() => { setDistance("cosine"); setM(16); }}>Cosine</Pill>
                     <Pill active={distance === "dot"} onClick={() => { setDistance("dot"); setM(16); }}>Dot product</Pill>
                     <Pill active={distance === "euclid"} onClick={() => { setDistance("euclid"); setM(16); }}>Euclidean</Pill>
-                  </div>
-                  <div className="mt-1 text-[10px] leading-snug text-fg-secondary">
-                    Cosine compares direction, dot product direction and magnitude,
-                    Euclidean straight-line distance.
-                  </div>
-                  {/* Measured, not assumed: every vector here is unit length,
-                      and for unit vectors dot IS cosine and Euclidean is a
-                      monotonic function of it. Saying so turns a control that
-                      appears broken into the interesting part. */}
-                  <div className="mt-1 text-[10px] leading-snug text-fg-secondary">
-                    These vectors are all the same length, so all three give the same ranking.
-                    That is worth knowing: normalise, and the choice stops mattering.
-                  </div>
-                </div>
-                <div>
-                  <div className="mb-1 text-[11px] text-fg-secondary">
-                    {/* The m variants were only built on the cosine index, so
-                        picking a different metric leaves m at its default. */}
-                    Graph density (m){distance !== "cosine" ? " — cosine index only" : ""}
-                  </div>
-                  <div className="flex gap-1">
+                  </Field>
+                  <Field
+                    label="Graph density"
+                    value={distance === "cosine" ? `m ${m}` : "cosine index only"}
+                    note="Links per node in the HNSW graph. More links, better recall, more memory."
+                  >
                     {([4, 16, 64] as const).map((v) => (
                       <Pill
                         key={v}
@@ -228,76 +280,55 @@ export default function RemotePage() {
                         {v}
                       </Pill>
                     ))}
-                  </div>
-                </div>
-                <div>
-                  <div className="mb-1 text-[11px] text-fg-secondary">Index</div>
-                  <div className="flex gap-1">
-                    <Pill active={!exact} onClick={() => setExact(false)}>HNSW graph</Pill>
-                    <Pill active={exact} onClick={() => setExact(true)}>Exact scan</Pill>
-                  </div>
-                  <div className="mt-1 text-[10px] leading-snug text-fg-secondary">
-                    Exact checks all 19,907 vectors. Perfect recall, and the thing the
-                    index exists to avoid at scale.
-                  </div>
-                </div>
-                <div>
-                  <div className="mb-1 text-[11px] text-fg-secondary">Minimum match</div>
-                  <div className="flex gap-1 flex-wrap">
+                  </Field>
+                </Section>
+
+                <Section title="Filters">
+                  <Field label="Genre" value={genre ?? "all"}>
+                    <Pill active={genre == null} onClick={() => setGenre(null)}>All</Pill>
+                    {["drama", "sci-fi", "thriller", "comedy", "horror"].map((g) => (
+                      <Pill key={g} active={genre === g} onClick={() => setGenre(g)}>{g}</Pill>
+                    ))}
+                  </Field>
+                  <Field label="Decade" value={decade ? `${decade[0]} to ${decade[1]}` : "any"}>
+                    <Pill active={decade == null} onClick={() => setDecade(null)}>Any</Pill>
+                    {([["80s", [1980, 1989]], ["90s", [1990, 1999]], ["00s", [2000, 2009]], ["10s+", [2010, 2030]]] as const).map(
+                      ([label, range]) => (
+                        <Pill key={label} active={decade?.[0] === range[0]} onClick={() => setDecade([range[0], range[1]])}>
+                          {label}
+                        </Pill>
+                      ),
+                    )}
+                  </Field>
+                  <Field
+                    label="Catalogue"
+                    value={tenant ?? "all"}
+                    note="Three tenants sharing one collection, kept apart by a payload filter rather than three deployments."
+                  >
+                    <Pill active={tenant == null} onClick={() => setTenant(null)}>All</Pill>
+                    {[["StreamFlix", "streamflix"], ["CineMax", "cinemax"], ["NicheCast", "nichecast"]].map(([label, v]) => (
+                      <Pill key={v} active={tenant === v} onClick={() => setTenant(v)}>{label}</Pill>
+                    ))}
+                  </Field>
+                  <Field label="Minimum match" value={threshold == null ? "any" : `${Math.round(threshold * 100)}%`}>
                     <Pill active={threshold == null} onClick={() => setThreshold(null)}>Any</Pill>
                     {[0.3, 0.4, 0.5].map((t) => (
                       <Pill key={t} active={threshold === t} onClick={() => setThreshold(t)}>
                         {Math.round(t * 100)}%
                       </Pill>
                     ))}
-                  </div>
-                </div>
-                <div>
-                  <div className="mb-1 text-[11px] text-fg-secondary">Decade</div>
-                  <div className="flex gap-1 flex-wrap">
-                    <Pill active={decade == null} onClick={() => setDecade(null)}>Any</Pill>
-                    {([["80s", [1980, 1989]], ["90s", [1990, 1999]], ["00s", [2000, 2009]], ["10s+", [2010, 2030]]] as const).map(
-                      ([label, range]) => (
-                        <Pill
-                          key={label}
-                          active={decade?.[0] === range[0]}
-                          onClick={() => setDecade([range[0], range[1]])}
-                        >
-                          {label}
-                        </Pill>
-                      ),
-                    )}
-                  </div>
-                </div>
-                <div>
-                  <div className="mb-1 text-[11px] text-fg-secondary">Catalogue</div>
-                  <div className="flex gap-1 flex-wrap">
-                    <Pill active={tenant == null} onClick={() => setTenant(null)}>All</Pill>
-                    {[["StreamFlix", "streamflix"], ["CineMax", "cinemax"], ["NicheCast", "nichecast"]].map(([label, v]) => (
-                      <Pill key={v} active={tenant === v} onClick={() => setTenant(v)}>{label}</Pill>
-                    ))}
-                  </div>
-                  <div className="mt-1 text-[10px] leading-snug text-fg-secondary">
-                    Three tenants sharing one collection, kept apart by a payload filter
-                    rather than by three deployments.
-                  </div>
-                </div>
-                <div className="flex gap-4">
-                  <div>
-                    <div className="mb-1 text-[11px] text-fg-secondary">Re-rank</div>
-                    <div className="flex gap-1">
-                      <Pill active={!rerank} onClick={() => setRerank(false)}>Off</Pill>
-                      <Pill active={rerank} onClick={() => setRerank(true)}>On</Pill>
-                    </div>
-                  </div>
-                  <div>
-                    <div className="mb-1 text-[11px] text-fg-secondary">Hybrid RRF</div>
-                    <div className="flex gap-1">
-                      <Pill active={!hybrid} onClick={() => setHybrid(false)}>Off</Pill>
-                      <Pill active={hybrid} onClick={() => setHybrid(true)}>On</Pill>
-                    </div>
-                  </div>
-                </div>
+                  </Field>
+                </Section>
+
+                {tuned > 0 && (
+                  <button
+                    type="button"
+                    onClick={resetOptions}
+                    className="w-full rounded-lg py-2 text-[12px] text-fg-secondary ring-1 ring-white/[0.08] active:bg-white/[0.05]"
+                  >
+                    Reset to defaults
+                  </button>
+                )}
               </div>
             )}
 
