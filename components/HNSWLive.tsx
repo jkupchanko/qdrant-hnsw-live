@@ -1896,7 +1896,8 @@ export function HNSWLive() {
       </AnimatePresence>
 
       {/* FOOTER */}
-      <footer className="flex items-center justify-between border-t border-white/[0.05] px-10 py-3 text-[0.6875rem] text-fg-secondary/60">
+      {/* pr-32 keeps clear of the fixed Fullscreen button, which sat on top of the right-hand item. */}
+      <footer className="flex items-center justify-between border-t border-white/[0.05] pl-10 pr-32 py-3 text-[0.6875rem] text-fg-secondary/60">
         <span className="font-mono">POST /collections/movies/points/search</span>
         {/* Every number on this screen is real. The drawing is not the graph,
             and someone in the crowd will know that — say it first. */}
@@ -1948,7 +1949,7 @@ function KioskGuard() {
   return (
     <button
       onClick={() => document.documentElement.requestFullscreen().catch(() => {})}
-      className="fixed bottom-3 right-3 z-40 rounded-md card-glass-strong px-3 py-1.5 text-[0.6875rem] text-fg-secondary hover:text-fg-primary transition-colors"
+      className="fixed bottom-3 right-3 z-40 rounded-md bg-bg-base/95 px-3 py-1.5 text-[0.6875rem] text-fg-secondary ring-1 ring-white/10 hover:text-fg-primary transition-colors"
     >
       Fullscreen
     </button>
