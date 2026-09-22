@@ -470,12 +470,50 @@ export function HNSWLive({ mode = "screens" }: { mode?: "screens" | "board" }) {
   const [remoteQrBig, setRemoteQrBig] = useState<string | null>(null);
   const [qrExpanded, setQrExpanded] = useState(false);
   const [remoteWaiting, setRemoteWaiting] = useState(0);
+  /** The address the QR actually points at, shown as text as well. */
+  const [remoteTarget, setRemoteTarget] = useState<string | null>(null);
+
+  /**
+   * Make the QR reachable.
+   *
+   * It encoded window.location.origin, which on the booth laptop is
+   * http://localhost:3000 — an address no phone can open. The QR scanned
+   * fine and went nowhere, which is worse than having no QR at all.
+   *
+   * Order of preference:
+   *   ?remote=https://…   whatever the operator says, no argument
+   *   a real hostname     already reachable, use it (the deployed case)
+   *   localhost           ask the server for an address on its own network
+   *
+   * The resolved URL is printed under the code too, so a phone that will not
+   * scan can still be typed into.
+   */
   useEffect(() => {
     const opts = { margin: 1, width: 220, color: { dark: "#F0F3FA", light: "#00000000" } };
     QRCode.toDataURL(REPO_URL, opts).then(setQrUrl).catch(() => {});
-    const remoteTarget = `${window.location.origin}/remote`;
-    QRCode.toDataURL(remoteTarget, opts).then(setRemoteQrUrl).catch(() => {});
-    QRCode.toDataURL(remoteTarget, { ...opts, width: 560 }).then(setRemoteQrBig).catch(() => {});
+
+    const paint = (target: string) => {
+      setRemoteTarget(target);
+      QRCode.toDataURL(target, opts).then(setRemoteQrUrl).catch(() => {});
+      QRCode.toDataURL(target, { ...opts, width: 560 }).then(setRemoteQrBig).catch(() => {});
+    };
+
+    const override = new URLSearchParams(window.location.search).get("remote");
+    if (override) {
+      paint(`${override.replace(/\/$/, "")}/remote`);
+      return;
+    }
+    const host = window.location.hostname;
+    if (host !== "localhost" && host !== "127.0.0.1" && host !== "[::1]") {
+      paint(`${window.location.origin}/remote`);
+      return;
+    }
+    fetch("/api/remote-url", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((d: { origin?: string | null }) => {
+        paint(d.origin ? `${d.origin}/remote` : `${window.location.origin}/remote`);
+      })
+      .catch(() => paint(`${window.location.origin}/remote`));
   }, []);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const boardRef = useRef<HTMLDivElement | null>(null);
@@ -1189,6 +1227,11 @@ export function HNSWLive({ mode = "screens" }: { mode?: "screens" | "board" }) {
                 <div className="mt-0.5 text-[0.5625rem] text-fg-secondary">
                   {remoteWaiting > 0 ? `${remoteWaiting} in queue` : "tap to enlarge"}
                 </div>
+                {remoteTarget && (
+                  <div className="mt-0.5 max-w-[11rem] truncate font-mono text-[0.5625rem] text-fg-secondary/70">
+                    {remoteTarget.replace(/^https?:\/\//, "")}
+                  </div>
+                )}
               </div>
             </button>
           )}
