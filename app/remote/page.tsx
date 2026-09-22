@@ -50,6 +50,10 @@ export default function RemotePage() {
    */
   const [distance, setDistance] = useState<"cosine" | "dot" | "euclid">("cosine");
   const [m, setM] = useState<4 | 16 | 64>(16);
+  const [exact, setExact] = useState(false);
+  const [threshold, setThreshold] = useState<number | null>(null);
+  const [decade, setDecade] = useState<[number, number] | null>(null);
+  const [tenant, setTenant] = useState<string | null>(null);
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const stageRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -70,7 +74,7 @@ export default function RemotePage() {
       const r = await fetch("/api/remote", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ text: t, options: { ef, topK, genre, rerank, hybrid, distance, m } }),
+        body: JSON.stringify({ text: t, options: { ef, topK, genre, rerank, hybrid, distance, m, exact, threshold, decade, tenant } }),
       });
       const d = (await r.json()) as { ok?: boolean; id?: number; position?: number };
       if (!r.ok || !d.id) throw new Error();
@@ -188,12 +192,16 @@ export default function RemotePage() {
                 </div>
                 <div>
                   <div className="mb-1 text-[11px] text-fg-secondary">
-                    How similarity is measured
+                    Distance metric
                   </div>
                   <div className="flex gap-1 flex-wrap">
-                    <Pill active={distance === "cosine"} onClick={() => { setDistance("cosine"); setM(16); }}>Angle</Pill>
-                    <Pill active={distance === "dot"} onClick={() => { setDistance("dot"); setM(16); }}>Angle + size</Pill>
-                    <Pill active={distance === "euclid"} onClick={() => { setDistance("euclid"); setM(16); }}>Distance</Pill>
+                    <Pill active={distance === "cosine"} onClick={() => { setDistance("cosine"); setM(16); }}>Cosine</Pill>
+                    <Pill active={distance === "dot"} onClick={() => { setDistance("dot"); setM(16); }}>Dot product</Pill>
+                    <Pill active={distance === "euclid"} onClick={() => { setDistance("euclid"); setM(16); }}>Euclidean</Pill>
+                  </div>
+                  <div className="mt-1 text-[10px] leading-snug text-fg-secondary">
+                    Cosine compares direction, dot product direction and magnitude,
+                    Euclidean straight-line distance.
                   </div>
                   {/* Measured, not assumed: every vector here is unit length,
                       and for unit vectors dot IS cosine and Euclidean is a
@@ -206,7 +214,9 @@ export default function RemotePage() {
                 </div>
                 <div>
                   <div className="mb-1 text-[11px] text-fg-secondary">
-                    Graph density (m){distance !== "cosine" ? " — angle only" : ""}
+                    {/* The m variants were only built on the cosine index, so
+                        picking a different metric leaves m at its default. */}
+                    Graph density (m){distance !== "cosine" ? " — cosine index only" : ""}
                   </div>
                   <div className="flex gap-1">
                     {([4, 16, 64] as const).map((v) => (
@@ -218,6 +228,58 @@ export default function RemotePage() {
                         {v}
                       </Pill>
                     ))}
+                  </div>
+                </div>
+                <div>
+                  <div className="mb-1 text-[11px] text-fg-secondary">Index</div>
+                  <div className="flex gap-1">
+                    <Pill active={!exact} onClick={() => setExact(false)}>HNSW graph</Pill>
+                    <Pill active={exact} onClick={() => setExact(true)}>Exact scan</Pill>
+                  </div>
+                  <div className="mt-1 text-[10px] leading-snug text-fg-secondary">
+                    Exact checks all 19,907 vectors. Perfect recall, and the thing the
+                    index exists to avoid at scale.
+                  </div>
+                </div>
+                <div>
+                  <div className="mb-1 text-[11px] text-fg-secondary">Minimum match</div>
+                  <div className="flex gap-1 flex-wrap">
+                    <Pill active={threshold == null} onClick={() => setThreshold(null)}>Any</Pill>
+                    {[0.3, 0.4, 0.5].map((t) => (
+                      <Pill key={t} active={threshold === t} onClick={() => setThreshold(t)}>
+                        {Math.round(t * 100)}%
+                      </Pill>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <div className="mb-1 text-[11px] text-fg-secondary">Decade</div>
+                  <div className="flex gap-1 flex-wrap">
+                    <Pill active={decade == null} onClick={() => setDecade(null)}>Any</Pill>
+                    {([["80s", [1980, 1989]], ["90s", [1990, 1999]], ["00s", [2000, 2009]], ["10s+", [2010, 2030]]] as const).map(
+                      ([label, range]) => (
+                        <Pill
+                          key={label}
+                          active={decade?.[0] === range[0]}
+                          onClick={() => setDecade([range[0], range[1]])}
+                        >
+                          {label}
+                        </Pill>
+                      ),
+                    )}
+                  </div>
+                </div>
+                <div>
+                  <div className="mb-1 text-[11px] text-fg-secondary">Catalogue</div>
+                  <div className="flex gap-1 flex-wrap">
+                    <Pill active={tenant == null} onClick={() => setTenant(null)}>All</Pill>
+                    {[["StreamFlix", "streamflix"], ["CineMax", "cinemax"], ["NicheCast", "nichecast"]].map(([label, v]) => (
+                      <Pill key={v} active={tenant === v} onClick={() => setTenant(v)}>{label}</Pill>
+                    ))}
+                  </div>
+                  <div className="mt-1 text-[10px] leading-snug text-fg-secondary">
+                    Three tenants sharing one collection, kept apart by a payload filter
+                    rather than by three deployments.
                   </div>
                 </div>
                 <div className="flex gap-4">

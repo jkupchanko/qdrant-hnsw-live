@@ -396,6 +396,17 @@ export interface RemoteOptions {
   distance?: "cosine" | "dot" | "euclid";
   /** HNSW graph density. Also build-time, also a sibling collection. */
   m?: 4 | 16 | 64;
+  /** Bypass the graph entirely and brute-force every vector. */
+  exact?: boolean;
+  /** Cosine floor: drop anything scoring below this. */
+  threshold?: number | null;
+  /** Release-year window, against the integer payload index. */
+  decade?: [number, number] | null;
+  /**
+   * One of the three fake streaming catalogues sharing this collection.
+   * Multitenancy by payload filter rather than by separate deployments.
+   */
+  tenant?: string | null;
 }
 
 async function ensureTinyCollection(name: string): Promise<void> {

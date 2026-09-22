@@ -304,6 +304,8 @@ export function HNSWLive({ mode = "screens" }: { mode?: "screens" | "board" }) {
           ef?: number | null; topK?: number; genre?: string | null;
           rerank?: boolean; hybrid?: boolean;
           distance?: "cosine" | "dot" | "euclid"; m?: 4 | 16 | 64;
+          exact?: boolean; threshold?: number | null;
+          decade?: [number, number] | null; tenant?: string | null;
         };
       };
       if (!d.text || d.id == null) {
@@ -321,6 +323,10 @@ export function HNSWLive({ mode = "screens" }: { mode?: "screens" | "board" }) {
       // a sibling collection rather than changing anything in flight.
       if (o.distance) setDistanceSel(o.distance);
       if (o.m) setMSel(o.m);
+      if (o.exact !== undefined) setExactMode(!!o.exact);
+      if (o.threshold !== undefined) setThreshold(o.threshold ?? null);
+      if (o.decade !== undefined) setDecade(o.decade ?? null);
+      if (o.tenant !== undefined) setTenant(o.tenant ?? null);
       pendingRemoteRef.current = { id: d.id, text: d.text, since: Date.now() };
       lastPhoneAtRef.current = Date.now();
       const ok = await runCustomText(d.text, "phone");
