@@ -14,6 +14,7 @@ import { SearchAct } from "./SearchAct";
 import { RankAct } from "./RankAct";
 import { MeasureAct } from "./MeasureAct";
 import { FilterAct } from "./FilterAct";
+import { EmbedStage } from "./EmbedStage";
 
 const REPO_URL = "https://github.com/jkupchanko/qdrant-hnsw-live";
 
@@ -37,7 +38,7 @@ const HOLD_MS = 9000; // a passer-by's glance is 3-10s; the old 5.2s wiped befor
 const HOLD_CUSTOM_MS = 16000; // a visitor's own search deserves a longer look
 const CLEAR_MS = 400;
 const TYPE_CHAR_MS = 42;
-const MIN_ENCODE_MS = 4000; // hold the embed step long enough to register
+const MIN_ENCODE_MS = 6800; // the embed sequence is four beats; cutting it short skips the point // hold the embed step long enough to register
 
 const EF_CYCLE = [16, 64, 128, 512] as const;
 const CYCLES_PER_EF = 2;
@@ -1473,59 +1474,14 @@ export function HNSWLive({ mode = "screens" }: { mode?: "screens" | "board" }) {
             )}
           </AnimatePresence>
 
-          {/* EMBED — the map, and the query about to join it.
-              This act answers "what is a vector, and why should I care" with
-              geography rather than a bar chart: 19,907 plots already placed,
-              genres drifting apart on their own, and the 384 numbers shown
-              small underneath as the evidence rather than the headline. */}
+          {/* EMBED — the step everyone asked about, finally shown.
+              The stage darkens, the sentence breaks into words, the words
+              become this query's real 384 values, and they collapse into one
+              point. The landing animation below then flies that point onto
+              the map. See EmbedStage for why this is not the map any more. */}
           <AnimatePresence>
             {phase === "encoding" && current && (
-              <motion.div
-                key="embed"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.4 }}
-                className="absolute inset-0 flex flex-col justify-end px-10 pb-6"
-              >
-                {/* Top: what is being looked at. Nothing covers the cloud. */}
-                <div className="flex items-end justify-between gap-6">
-                <div className="max-w-[30ch] rounded-xl bg-bg-base/95 px-6 py-4 text-left ring-1 ring-white/10">
-                  <div
-                    className="font-semibold tracking-tight-brand text-fg-primary"
-                    style={{ fontSize: "clamp(1.3rem, 2vw, 2rem)", lineHeight: 1.15 }}
-                  >
-                    Similar stories land near each other
-                  </div>
-                  <div className="mt-1.5 text-[0.8125rem] leading-snug text-fg-secondary">
-                    Nobody tagged these. The map arranged itself.
-                  </div>
-                </div>
-
-                {/* Bottom: the query turning into numbers, kept secondary and
-                    kept SHORT. The taller version of this panel covered the
-                    romance and musical anchors, which are the two clusters
-                    that make the point. One idea per act; the distance
-                    geometry has its own hover explorer. */}
-                <div className="flex w-full max-w-[42vw] items-center gap-4 rounded-xl bg-bg-base/95 px-5 py-3 ring-1 ring-white/10">
-                  <div
-                    onMouseEnter={() => setExplorerOpen(true)}
-                    className="shrink-0 cursor-zoom-in"
-                    title="How similarity is measured"
-                  >
-                    <DistanceViz metric={distanceSel} />
-                  </div>
-                  <div className="min-w-0 flex-1 text-left">
-                    <div className="truncate text-[0.9375rem] text-fg-secondary">
-                      &ldquo;<span className="text-fg-primary/90">{current.text}</span>&rdquo; becomes 384 numbers
-                    </div>
-                    <div className="mt-1.5">
-                      <VectorStrip vector={current.vector} />
-                    </div>
-                  </div>
-                </div>
-                </div>
-              </motion.div>
+              <EmbedStage key="embed" text={current.text} vector={current.vector} />
             )}
           </AnimatePresence>
 
@@ -1565,7 +1521,7 @@ export function HNSWLive({ mode = "screens" }: { mode?: "screens" | "board" }) {
           {/* GENRE ANCHORS — drawn at measured centroids, not decoration.
               Held through the walk too, so the path has somewhere to be. */}
           <AnimatePresence>
-            {(phase === "encoding" || phase === "walking") && genreAnchors.length > 0 && (
+            {phase === "walking" && genreAnchors.length > 0 && (
               <motion.div
                 key="anchors"
                 initial={{ opacity: 0 }}
