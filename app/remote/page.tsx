@@ -42,6 +42,14 @@ export default function RemotePage() {
   const [genre, setGenre] = useState<string | null>(null);
   const [rerank, setRerank] = useState(false);
   const [hybrid, setHybrid] = useState(false);
+  /**
+   * Distance and graph density are build-time properties of a Qdrant
+   * collection, not query parameters. Picking one here routes the search to
+   * a sibling collection holding the same 19,907 films indexed differently,
+   * which is why they are the two knobs that cannot be changed mid-flight.
+   */
+  const [distance, setDistance] = useState<"cosine" | "dot" | "euclid">("cosine");
+  const [m, setM] = useState<4 | 16 | 64>(16);
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const stageRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -62,7 +70,7 @@ export default function RemotePage() {
       const r = await fetch("/api/remote", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ text: t, options: { ef, topK, genre, rerank, hybrid } }),
+        body: JSON.stringify({ text: t, options: { ef, topK, genre, rerank, hybrid, distance, m } }),
       });
       const d = (await r.json()) as { ok?: boolean; id?: number; position?: number };
       if (!r.ok || !d.id) throw new Error();
@@ -175,6 +183,40 @@ export default function RemotePage() {
                     <Pill active={genre == null} onClick={() => setGenre(null)}>All</Pill>
                     {["drama", "sci-fi", "thriller", "comedy", "horror"].map((g) => (
                       <Pill key={g} active={genre === g} onClick={() => setGenre(g)}>{g}</Pill>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <div className="mb-1 text-[11px] text-fg-secondary">
+                    How similarity is measured
+                  </div>
+                  <div className="flex gap-1 flex-wrap">
+                    <Pill active={distance === "cosine"} onClick={() => { setDistance("cosine"); setM(16); }}>Angle</Pill>
+                    <Pill active={distance === "dot"} onClick={() => { setDistance("dot"); setM(16); }}>Angle + size</Pill>
+                    <Pill active={distance === "euclid"} onClick={() => { setDistance("euclid"); setM(16); }}>Distance</Pill>
+                  </div>
+                  {/* Measured, not assumed: every vector here is unit length,
+                      and for unit vectors dot IS cosine and Euclidean is a
+                      monotonic function of it. Saying so turns a control that
+                      appears broken into the interesting part. */}
+                  <div className="mt-1 text-[10px] leading-snug text-fg-secondary">
+                    These vectors are all the same length, so all three give the same ranking.
+                    That is worth knowing: normalise, and the choice stops mattering.
+                  </div>
+                </div>
+                <div>
+                  <div className="mb-1 text-[11px] text-fg-secondary">
+                    Graph density (m){distance !== "cosine" ? " — angle only" : ""}
+                  </div>
+                  <div className="flex gap-1">
+                    {([4, 16, 64] as const).map((v) => (
+                      <Pill
+                        key={v}
+                        active={m === v && distance === "cosine"}
+                        onClick={() => { setDistance("cosine"); setM(v); }}
+                      >
+                        {v}
+                      </Pill>
                     ))}
                   </div>
                 </div>

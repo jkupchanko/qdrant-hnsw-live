@@ -300,7 +300,11 @@ export function HNSWLive({ mode = "screens" }: { mode?: "screens" | "board" }) {
         id?: number | null;
         text?: string | null;
         waiting?: number;
-        options?: { ef?: number | null; topK?: number; genre?: string | null; rerank?: boolean; hybrid?: boolean };
+        options?: {
+          ef?: number | null; topK?: number; genre?: string | null;
+          rerank?: boolean; hybrid?: boolean;
+          distance?: "cosine" | "dot" | "euclid"; m?: 4 | 16 | 64;
+        };
       };
       if (!d.text || d.id == null) {
         setRemoteWaiting(0);
@@ -313,6 +317,10 @@ export function HNSWLive({ mode = "screens" }: { mode?: "screens" | "board" }) {
       if (o.genre !== undefined) setGenreFilter(o.genre ?? null);
       if (o.rerank !== undefined) setRerankOverride(!!o.rerank);
       if (o.hybrid !== undefined) setHybridMode(!!o.hybrid);
+      // Distance and m are build-time in Qdrant, so these route the query to
+      // a sibling collection rather than changing anything in flight.
+      if (o.distance) setDistanceSel(o.distance);
+      if (o.m) setMSel(o.m);
       pendingRemoteRef.current = { id: d.id, text: d.text, since: Date.now() };
       lastPhoneAtRef.current = Date.now();
       const ok = await runCustomText(d.text, "phone");
@@ -1129,6 +1137,18 @@ export function HNSWLive({ mode = "screens" }: { mode?: "screens" | "board" }) {
         <span>
           <span className="text-fg-primary/85 font-medium">MiniLM</span>, embedded in your browser
         </span>
+        {!board && (
+          <span className="flex items-center gap-1.5">
+            <span className="text-fg-secondary/70">running</span>
+            <span className="rounded bg-white/[0.06] px-2 py-0.5 font-mono text-fg-primary/85">
+              {distanceSel === "cosine" ? "angle" : distanceSel === "dot" ? "angle+size" : "distance"}
+              {" · m "}{mSel}
+              {" · ef "}{currentEf}
+              {" · top "}{topK}
+            </span>
+            <span className="text-fg-secondary/70">change it from your phone</span>
+          </span>
+        )}
       </div>
 
       {/* ─── DEMO TAB ─── */}
@@ -1225,6 +1245,7 @@ export function HNSWLive({ mode = "screens" }: { mode?: "screens" | "board" }) {
               <img src={remoteQrUrl} alt="Scan to search from your phone" className="h-16 w-16" />
               <div className="leading-snug">
                 <div className="text-[0.6875rem] font-medium text-fg-primary">Search from<br />your phone</div>
+                <div className="text-[0.5625rem] text-fg-secondary">and tune the search</div>
                 <div className="mt-0.5 text-[0.5625rem] text-fg-secondary">
                   {remoteWaiting > 0 ? `${remoteWaiting} in queue` : "tap to enlarge"}
                 </div>

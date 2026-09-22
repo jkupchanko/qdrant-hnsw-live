@@ -392,6 +392,10 @@ export interface RemoteOptions {
   genre?: string | null;
   rerank?: boolean;
   hybrid?: boolean;
+  /** Distance metric. Build-time in Qdrant, so it routes to a sibling collection. */
+  distance?: "cosine" | "dot" | "euclid";
+  /** HNSW graph density. Also build-time, also a sibling collection. */
+  m?: 4 | 16 | 64;
 }
 
 async function ensureTinyCollection(name: string): Promise<void> {
