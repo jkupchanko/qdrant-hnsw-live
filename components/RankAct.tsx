@@ -179,7 +179,7 @@ export function RankAct() {
           sub={
             stage === "searching"
               ? "searching…"
-              : `${searchMs == null ? "" : `${searchMs < 1 ? "<1" : searchMs.toFixed(1)} ms · `}compares angles, never reads the words`
+              : `${searchMs == null ? "" : `${searchMs < 1 ? "<1" : searchMs.toFixed(1)} ms · `}compares angles`
           }
           accent="#6047FF"
           rows={rows}
@@ -192,8 +192,8 @@ export function RankAct() {
           label="After re-ranking"
           sub={
             stage === "reranked"
-              ? `${rerankMs == null ? "" : `${(rerankMs / 1000).toFixed(1)} s · `}reads the question and each plot together`
-              : "the cross-encoder is reading all 18 candidates…"
+              ? `${rerankMs == null ? "" : `${(rerankMs / 1000).toFixed(1)} s · `}reads every plot`
+              : "reading all 18 candidates…"
           }
           accent="#DC244C"
           rows={lower}
@@ -208,16 +208,15 @@ export function RankAct() {
           <span className="text-fg-primary/80">Could not finish this one. Moving on.</span>
         ) : stage === "reranked" ? (
           <>
-            Vector search shortlisted <span className="text-fg-primary/85">{CANDIDATES}</span> films
-            in milliseconds by comparing angles. The cross-encoder then read the question and each
-            plot together and changed the order
+            Cheap search shortlists <span className="text-fg-primary/85">{CANDIDATES}</span>.
+            An expensive model reorders them
             {movers > 0 && (
               <>
-                , pulling <span className="text-fg-primary/85">{movers}</span> title
-                {movers === 1 ? "" : "s"} up from outside the top {SHOWN}
+                , pulling <span className="text-fg-primary/85">{movers}</span> up from outside
+                the top {SHOWN}
               </>
             )}
-            . Cheap and rough first, expensive and careful second — that is why both exist.
+            .
           </>
         ) : (
           <>Cheap search finds candidates. An expensive model decides the order.</>

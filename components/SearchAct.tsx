@@ -40,25 +40,25 @@ const COLUMNS: Array<{ key: ModeKey; title: string; lead: string; accent: string
   {
     key: "bm25",
     title: "Keywords",
-    lead: "Matches the words you typed. Fast, literal, blind to a synonym.",
+    lead: "The exact words you typed",
     accent: "#03A9F4",
   },
   {
     key: "minicoil",
     title: "Smart keywords",
-    lead: "Still word matching, but it knows which sense of the word you meant.",
+    lead: "Words, with the right sense",
     accent: "#009688",
   },
   {
     key: "dense",
     title: "Meaning",
-    lead: "Compares what the sentence means. Finds films that never say your words.",
+    lead: "What the sentence means",
     accent: "#6047FF",
   },
   {
     key: "hybrid",
     title: "All three, fused",
-    lead: "One request. Qdrant runs all three inside the database and merges them.",
+    lead: "All three, merged by Qdrant",
     accent: "#DC244C",
   },
 ];
@@ -249,10 +249,8 @@ export function SearchAct({ queries }: { queries: Query[] }) {
           <span className="text-fg-primary/80">The cluster did not answer. Moving on.</span>
         ) : (
           <>
-            All four ran against the same{" "}
-            <span className="text-fg-primary/85">19,907</span> films on one Qdrant cluster.
-            The fused column is a <span className="text-fg-primary/85">single request</span>:
-            Qdrant runs the three searches and merges them server-side
+            Same films, one cluster. The fused column is a{" "}
+            <span className="text-fg-primary/85">single request</span>
             {slowest != null && (
               <>
                 , all of it in{" "}

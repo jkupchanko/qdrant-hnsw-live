@@ -982,15 +982,15 @@ export function HNSWLive() {
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1 rounded-md bg-white/[0.04] ring-1 ring-white/[0.06] p-1">
-          <TabButton active={tab === "demo"} onClick={() => setTab("demo")}>Live demo</TabButton>
-          <TabButton active={tab === "search"} onClick={() => setTab("search")}>Dense vs sparse</TabButton>
+          <TabButton active={tab === "demo"} onClick={() => setTab("demo")}>Demo</TabButton>
+          <TabButton active={tab === "search"} onClick={() => setTab("search")}>Search</TabButton>
           <TabButton active={tab === "rank"} onClick={() => setTab("rank")}>Ranking</TabButton>
+          <TabButton active={tab === "inside"} onClick={() => setTab("inside")}>Inside</TabButton>
           <TabButton active={tab === "compare"} onClick={() => setTab("compare")}>Compare</TabButton>
-          <TabButton active={tab === "inside"} onClick={() => setTab("inside")}>Under the hood</TabButton>
         </div>
         <div className="flex min-w-0 flex-1 items-center justify-end gap-2 text-xs text-fg-secondary/70">
           <span className="inline-block h-1.5 w-1.5 rounded-full bg-qdrant-red animate-pulse" />
-          <span className="whitespace-nowrap">{totalOps} live searches</span>
+          <span className="whitespace-nowrap">{totalOps} live {totalOps === 1 ? "search" : "searches"}</span>
         </div>
       </header>
 
@@ -1010,25 +1010,10 @@ export function HNSWLive() {
           <span className="text-fg-primary/85 font-medium tabular-nums">
             {clusterInfo ? clusterInfo.points_count.toLocaleString() : "—"}
           </span>{" "}
-          vectors indexed
+          vectors
         </span>
         <span>
-          {clusterInfo
-            ? `${clusterInfo.config.params.vectors.size}-d ${clusterInfo.config.params.vectors.distance}, HNSW m=${clusterInfo.config.hnsw_config.m}`
-            : "—"}
-        </span>
-        <span>
-          model <span className="text-fg-primary/85 font-medium">all-MiniLM-L6-v2</span>, embedded in your browser
-        </span>
-        <span>
-          this session:{" "}
-          {stats.p50 != null ? (
-            <span className="text-fg-primary/85 font-medium tabular-nums">
-              p50 {stats.p50} ms · p95 {stats.p95} ms
-            </span>
-          ) : (
-            "no searches yet"
-          )}
+          <span className="text-fg-primary/85 font-medium">MiniLM</span>, embedded in your browser
         </span>
       </div>
 
@@ -1915,7 +1900,7 @@ export function HNSWLive() {
         <span className="font-mono">POST /collections/movies/points/search</span>
         {/* Every number on this screen is real. The drawing is not the graph,
             and someone in the crowd will know that — say it first. */}
-        <span>Latencies and results are live. The map is a 2-D projection and the drawn path illustrates the walk.</span>
+        <span>Live results. The map is a 2-D projection; the drawn path is illustrative.</span>
         <span>qdrant.tech/cloud</span>
       </footer>
     </div>
