@@ -1646,7 +1646,7 @@ export function HNSWLive() {
       {/* ─── COMPARE TAB ─── */}
       {/* ACT FOUR — ranking, and the two scorers disagreeing. */}
       <main className={`flex-1 min-h-0 ${tab === "rank" ? "block" : "hidden"}`}>
-        <RankAct queries={queries} />
+        <RankAct />
       </main>
 
       {/* ACT TWO — the retrieval methods, raced against each other. */}

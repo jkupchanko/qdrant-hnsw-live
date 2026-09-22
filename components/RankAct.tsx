@@ -46,7 +46,25 @@ const sigmoid = (x: number): number => 1 / (1 + Math.exp(-x));
 
 type Stage = "searching" | "vector" | "reranked";
 
-export function RankAct({ queries }: { queries: Query[] }) {
+export function RankAct() {
+  /**
+   * This act runs its own query set, not the loop's.
+   *
+   * The looping queries are moods, and a cross-encoder cannot rank those —
+   * measured, both ms-marco and bge-reranker-base score every candidate at
+   * the floor, because a plot summary never *answers* a request for a
+   * recommendation. These are descriptive, plot-shaped queries, and every one
+   * of them was validated offline by scripts/build_rank_queries.py: it kept
+   * only queries where the model finds something it believes in and where
+   * re-ranking visibly changes the answer.
+   */
+  const [queries, setQueries] = useState<Query[]>([]);
+  useEffect(() => {
+    fetch("/data/rank-queries.json", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((d: Query[]) => setQueries(d))
+      .catch(() => setQueries([]));
+  }, []);
   const [idx, setIdx] = useState(0);
   const [stage, setStage] = useState<Stage>("searching");
   const [rows, setRows] = useState<Row[]>([]);
@@ -191,14 +209,15 @@ export function RankAct({ queries }: { queries: Query[] }) {
         ) : stage === "reranked" ? (
           <>
             Vector search shortlisted <span className="text-fg-primary/85">{CANDIDATES}</span> films
-            in milliseconds. The cross-encoder then read every one properly and changed the order
+            in milliseconds by comparing angles. The cross-encoder then read the question and each
+            plot together and changed the order
             {movers > 0 && (
               <>
                 , pulling <span className="text-fg-primary/85">{movers}</span> title
                 {movers === 1 ? "" : "s"} up from outside the top {SHOWN}
               </>
             )}
-            . Fast and rough first, slow and careful second.
+            . Cheap and rough first, expensive and careful second — that is why both exist.
           </>
         ) : (
           <>Cheap search finds candidates. An expensive model decides the order.</>
