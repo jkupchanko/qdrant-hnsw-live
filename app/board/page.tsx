@@ -4,9 +4,9 @@ import { StarField } from "@/components/StarField";
 /**
  * The second display.
  *
- * Screen one is the pipeline, which is watched. This is the board beside it:
- * cluster detail and the competitive comparison, which are read. Nothing here
- * rotates or animates away, so a visitor can take as long as they like.
+ * Screen one loops the story. This is the board beside it: cluster detail and
+ * the competitive comparison, which are read rather than watched, so nothing
+ * here rotates away while somebody is halfway through it.
  */
 export default function BoardPage() {
   return (

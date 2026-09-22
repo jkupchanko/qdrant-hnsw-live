@@ -121,21 +121,21 @@ interface ClusterInfo {
 }
 
 /**
- * One screen, or the board that goes beside it.
+ * The booth screen, or the board beside it.
  *
- * "pipeline" is the booth's main display: the whole retrieval story stacked
- * vertically so a passer-by sees every stage at once. Tabs were the wrong
- * shape for this — a stranger who glances for eight seconds saw one fifth of
- * the story and had no idea the rest existed.
+ * "screens" is the main display: each stage gets the whole screen to itself
+ * and the loop walks them. Tabs are gone — they were clutter a passer-by
+ * cannot act on, and a full screen per stage reads far better from a
+ * distance than everything crammed into one.
  *
- * "board" is the optional second display: the cluster detail and the
- * competitive comparison, which are read, not watched.
+ * "board" is the optional second display: cluster detail and the competitive
+ * comparison, which are read rather than watched, and so never move.
  */
-export function HNSWLive({ mode = "pipeline" }: { mode?: "pipeline" | "board" }) {
+export function HNSWLive({ mode = "screens" }: { mode?: "screens" | "board" }) {
   const board = mode === "board";
   const [movies, setMovies] = useState<Movie[]>([]);
   const [queries, setQueries] = useState<Query[]>([]);
-  const tab: Tab = board ? "inside" : "demo";
+  const [tab, setTab] = useState<Tab>(mode === "board" ? "inside" : "demo");
   // ATTRACT ROTATION — nobody is standing here to press the tabs, so the
   // screen walks them itself. Two thirds of the story (the comparison and the
   // internals) used to be unreachable on an unattended screen. Dwell times are
@@ -242,6 +242,22 @@ export function HNSWLive({ mode = "pipeline" }: { mode?: "pipeline" | "board" })
     setSearchInput("");
     await runCustomText(text, "screen");
   };
+
+  // Rotate tabs on a loop, and stand down for two minutes whenever a human
+  // touches anything — a staffer driving the screen should never be yanked
+  // off the tab they just opened.
+  useEffect(() => {
+    if (!rotating) return;
+    if (board) return;
+    const dwell: Record<Tab, number> = {
+      demo: 75_000, search: 50_000, rank: 50_000, inside: 0, compare: 0,
+    };
+    const order: Tab[] = ["demo", "search", "rank"];
+    const t = setTimeout(() => {
+      setTab((cur) => order[(order.indexOf(cur) + 1) % order.length]);
+    }, dwell[tab] * dwellScale);
+    return () => clearTimeout(t);
+  }, [tab, rotating, dwellScale, board]);
 
   useEffect(() => {
     let resume: ReturnType<typeof setTimeout>;
@@ -456,6 +472,34 @@ export function HNSWLive({ mode = "pipeline" }: { mode?: "pipeline" | "board" })
     QRCode.toDataURL(remoteTarget, { ...opts, width: 560 }).then(setRemoteQrBig).catch(() => {});
   }, []);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const boardRef = useRef<HTMLDivElement | null>(null);
+
+  /**
+   * The board drifts.
+   *
+   * It is six thousand pixels of reading on a screen nobody will scroll, so
+   * all but the first thousand would never be seen. It creeps down at walking
+   * reading pace, pauses at the bottom, and returns — and stands still the
+   * moment somebody touches it, because being yanked mid-sentence is worse
+   * than not moving at all.
+   */
+  useEffect(() => {
+    if (!board || !rotating) return;
+    const el = boardRef.current;
+    if (!el) return;
+    let dir = 1;
+    let paused = 0;
+    const id = setInterval(() => {
+      const max = el.scrollHeight - el.clientHeight;
+      if (max <= 0) return;
+      if (paused > 0) { paused -= 1; return; }
+      const next = el.scrollTop + dir * 1.1;
+      if (next >= max) { dir = -1; paused = 60; el.scrollTop = max; return; }
+      if (next <= 0) { dir = 1; paused = 60; el.scrollTop = 0; return; }
+      el.scrollTop = next;
+    }, 30);
+    return () => clearInterval(id);
+  }, [board, rotating]);
   /**
    * Where each genre sits on the map.
    *
@@ -959,24 +1003,41 @@ export function HNSWLive({ mode = "pipeline" }: { mode?: "pipeline" | "board" })
   const searching = phase === "encoding" || phase === "walking";
 
   return (
-    <div className="relative z-10 flex h-screen w-screen flex-col overflow-hidden select-none">
+    <div ref={boardRef} className={`relative z-10 flex h-screen w-screen flex-col select-none ${board ? "overflow-y-auto" : "overflow-hidden"}`}>
       <KioskGuard />
       {/* HEADER */}
       {/* HEADER — laid out as three flex columns rather than an absolutely
           centred tab group. At booth scale the title grew straight under the
           centred tabs; now the three blocks simply cannot overlap. */}
-      <header className="relative flex items-center gap-6 border-b border-white/[0.05] px-8 py-2.5">
+      <header className="relative flex items-center gap-6 border-b border-white/[0.05] px-10 pt-6 pb-5">
         <div className="flex min-w-0 flex-[3] items-center gap-4">
-          <QdrantLogo className="h-6 shrink-0" />
+          <QdrantLogo className="h-7 shrink-0" />
           <span className="h-8 w-px shrink-0 bg-white/10" />
           <div className="min-w-0 leading-tight">
-            <div className="truncate text-xl font-semibold tracking-tight-brand text-fg-primary">Semantic search</div>
-
+            <div className="truncate text-xl font-semibold tracking-tight-brand text-fg-primary">Semantic search, live.</div>
+            <div className="truncate text-[0.6875rem] text-fg-secondary">
+              {movies.length > 0
+                ? `${movies.length.toLocaleString()} movies on one live cluster`
+                : "one live cluster"}
+            </div>
           </div>
         </div>
+        {/* Where we are in the loop, as three dots. Not a control: nobody is
+            going to walk up and press it, and five labelled tabs read as a
+            menu with four things missing. */}
         {!board && (
-          <div className="shrink-0">
-            <StepRail phase={phase} reranking={rerankMode} />
+          <div className="flex shrink-0 items-center gap-2">
+            {(["demo", "search", "rank"] as Tab[]).map((t) => (
+              <span
+                key={t}
+                className="block rounded-full transition-all duration-500"
+                style={{
+                  width: tab === t ? "1.75rem" : "0.4rem",
+                  height: "0.4rem",
+                  background: tab === t ? "#DC244C" : "rgba(240,243,250,0.22)",
+                }}
+              />
+            ))}
           </div>
         )}
         <div className="flex min-w-0 flex-1 items-center justify-end gap-2 text-xs text-fg-secondary/70">
@@ -985,34 +1046,33 @@ export function HNSWLive({ mode = "pipeline" }: { mode?: "pipeline" | "board" })
         </div>
       </header>
 
-      {/* ─── THE ONE SCREEN ───
-          Every stage stacked, all of it visible at a glance. Tabs meant a
-          passer-by saw one fifth of the story and could not know the rest
-          existed; nobody is going to stand here and narrate the other four. */}
-      <main className={`relative min-h-0 flex-1 flex-col gap-3 px-6 pb-3 ${board ? "hidden" : "flex"}`}>
-        {/* THE QUESTION — one line, the biggest thing on the screen. */}
-        <div className="flex h-[7vh] shrink-0 items-center justify-center">
-          <div
-            className="truncate text-center font-semibold tracking-tight-brand text-fg-primary"
-            style={{ fontSize: "clamp(1.5rem, 2.7vw, 2.6rem)", lineHeight: 1.1 }}
-          >
-            {phase === "typing" || phase === "clearing" ? (
-              <>
-                {typed}
-                <span
-                  aria-hidden
-                  className="ml-1 inline-block w-[3px] align-baseline"
-                  style={{ height: "0.85em", background: "#DC244C", transform: "translateY(0.1em)", animation: "pulse 0.85s ease-in-out infinite" }}
-                />
-              </>
-            ) : (
-              <>&ldquo;{current?.text ?? ""}&rdquo;</>
-            )}
-          </div>
-        </div>
+      {/* LIVE STATS STRIP — the numbers a booth visitor asks for, on every tab:
+          what cluster, how big, which model, and how fast it has actually been
+          this session. All values are live; nothing here is hardcoded copy. */}
+      <div className="flex items-center justify-center gap-x-6 gap-y-1 flex-wrap border-b border-white/[0.05] bg-white/[0.02] px-10 py-1.5 text-[0.6875rem] text-fg-secondary">
+        <span className="flex items-center gap-1.5">
+          <span
+            className={`inline-block h-1.5 w-1.5 rounded-full ${
+              clusterInfo?.status === "green" ? "bg-emerald-400" : clusterInfo ? "bg-amber-400" : "bg-white/20"
+            }`}
+          />
+          Qdrant Cloud {clusterInfo ? clusterInfo.status : "connecting"}
+        </span>
+        <span>
+          <span className="text-fg-primary/85 font-medium tabular-nums">
+            {clusterInfo ? clusterInfo.points_count.toLocaleString() : "—"}
+          </span>{" "}
+          vectors
+        </span>
+        <span>
+          <span className="text-fg-primary/85 font-medium">MiniLM</span>, embedded in your browser
+        </span>
+      </div>
 
-        {/* THE MAP — no copy on top of it any more; the bands carry the words. */}
-        <div className="relative min-h-0 flex-1 rounded-lg overflow-hidden card">
+      {/* ─── DEMO TAB ─── */}
+      <main className={`relative flex-1 min-h-0 flex-col ${tab === "demo" ? "flex" : "hidden"}`}>
+        {/* Map fills the stage */}
+        <div className="absolute inset-x-6 top-0 bottom-6 rounded-lg overflow-hidden card">
           <canvas
             ref={canvasRef}
             onMouseMove={handleMapMove}
@@ -1045,6 +1105,11 @@ export function HNSWLive({ mode = "pipeline" }: { mode?: "pipeline" | "board" })
               </div>
             </div>
           )}
+
+          {/* PIPELINE RAIL — the whole process, in order, always visible */}
+          <div className="absolute top-5 left-1/2 -translate-x-1/2 z-10">
+            <StepRail phase={phase} reranking={rerankMode} />
+          </div>
 
           {/* DEGRADED BADGE — if the venue wifi or the cluster drops, say so
               rather than passing a cached result off as a live one. */}
@@ -1312,6 +1377,92 @@ export function HNSWLive({ mode = "pipeline" }: { mode?: "pipeline" | "board" })
             )}
           </AnimatePresence>
 
+          {/* ASK — giant centered question */}
+          <AnimatePresence>
+            {(phase === "typing" || phase === "clearing") && (
+              <motion.div
+                key="ask"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.4 }}
+                className="absolute inset-0 flex flex-col items-center justify-center bg-bg-base/60 backdrop-blur-[2px] px-16 text-center"
+              >
+                <div className="eyebrow mb-6">
+                  {customSource === "phone" ? "From someone's phone" : `Ask ${movies.length.toLocaleString()} movies`}
+                </div>
+                <div
+                  className="font-semibold tracking-tight-brand text-fg-primary max-w-[24ch]"
+                  style={{ fontSize: "clamp(2.4rem, 4.6vw, 4.2rem)", lineHeight: 1.12 }}
+                >
+                  {typed}
+                  <span
+                    aria-hidden
+                    className="ml-1 inline-block w-[3px] align-baseline"
+                    style={{ height: "0.9em", background: "#DC244C", transform: "translateY(0.12em)", animation: "pulse 0.85s ease-in-out infinite" }}
+                  />
+                </div>
+                <div className="mt-8 text-sm text-fg-secondary/70">No keywords. No filters. Just meaning.</div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* EMBED — the map, and the query about to join it.
+              This act answers "what is a vector, and why should I care" with
+              geography rather than a bar chart: 19,907 plots already placed,
+              genres drifting apart on their own, and the 384 numbers shown
+              small underneath as the evidence rather than the headline. */}
+          <AnimatePresence>
+            {phase === "encoding" && current && (
+              <motion.div
+                key="embed"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.4 }}
+                className="absolute inset-0 flex flex-col justify-end px-10 pb-6"
+              >
+                {/* Top: what is being looked at. Nothing covers the cloud. */}
+                <div className="flex items-end justify-between gap-6">
+                <div className="max-w-[30ch] rounded-xl bg-bg-base/95 px-6 py-4 text-left ring-1 ring-white/10">
+                  <div
+                    className="font-semibold tracking-tight-brand text-fg-primary"
+                    style={{ fontSize: "clamp(1.3rem, 2vw, 2rem)", lineHeight: 1.15 }}
+                  >
+                    Similar stories land near each other
+                  </div>
+                  <div className="mt-1.5 text-[0.8125rem] leading-snug text-fg-secondary">
+                    Nobody tagged these. The map arranged itself.
+                  </div>
+                </div>
+
+                {/* Bottom: the query turning into numbers, kept secondary and
+                    kept SHORT. The taller version of this panel covered the
+                    romance and musical anchors, which are the two clusters
+                    that make the point. One idea per act; the distance
+                    geometry has its own hover explorer. */}
+                <div className="flex w-full max-w-[42vw] items-center gap-4 rounded-xl bg-bg-base/95 px-5 py-3 ring-1 ring-white/10">
+                  <div
+                    onMouseEnter={() => setExplorerOpen(true)}
+                    className="shrink-0 cursor-zoom-in"
+                    title="How similarity is measured"
+                  >
+                    <DistanceViz metric={distanceSel} />
+                  </div>
+                  <div className="min-w-0 flex-1 text-left">
+                    <div className="truncate text-[0.9375rem] text-fg-secondary">
+                      &ldquo;<span className="text-fg-primary/90">{current.text}</span>&rdquo; becomes 384 numbers
+                    </div>
+                    <div className="mt-1.5">
+                      <VectorStrip vector={current.vector} />
+                    </div>
+                  </div>
+                </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
           {/* GENRE ANCHORS — drawn at measured centroids, not decoration.
               Held through the walk too, so the path has somewhere to be. */}
           <AnimatePresence>
@@ -1379,33 +1530,173 @@ export function HNSWLive({ mode = "pipeline" }: { mode?: "pipeline" | "board" })
             )}
           </AnimatePresence>
 
+          {/* ANSWER ECHO — the question stays visible under the step rail */}
+          <AnimatePresence>
+            {showResults && latest && (
+              <motion.div
+                key="ask-echo"
+                initial={{ opacity: 0, y: -8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -6 }}
+                className="absolute top-[4.5rem] left-0 right-0 z-10 flex flex-col items-center pointer-events-none"
+              >
+                <div className="max-w-[80%] rounded-md card-glass-strong px-8 py-3.5 text-center">
+                  <div className="text-[0.75rem] text-fg-secondary mb-0.5">
+                    {customSource === "phone" ? "Someone asked" : "You asked"}
+                  </div>
+                  <div className="text-2xl font-semibold tracking-tight-brand text-fg-primary leading-snug">
+                    &ldquo;{latest.text}&rdquo;
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* ANSWER — results + one huge number */}
+          <AnimatePresence>
+            {showResults && latest && (
+              <motion.div
+                key="answer"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="absolute inset-x-0 bottom-0 pb-6 px-8"
+              >
+                {/* Keyword vs meaning — the walk-by hook */}
+                {latest.keywordCount != null && (
+                  <div className="mb-4 flex items-stretch justify-center gap-3">
+                    <div className="rounded-lg card-glass-strong px-6 py-3 text-center">
+                      <div className="eyebrow">Keyword search</div>
+                      <div className={`text-3xl font-semibold tracking-tight-brand ${latest.keywordCount === 0 ? "text-fg-secondary" : "text-fg-primary"}`}>
+                        {latest.keywordCount.toLocaleString()}
+                      </div>
+                      <div className="text-[0.625rem] text-fg-secondary">
+                        {latest.keywordCount === 0
+                          ? "those words never appear"
+                          : "documents contain these words"}
+                      </div>
+                    </div>
+                    <div className="flex items-center text-fg-secondary/50 text-lg">vs</div>
+                    <div className="rounded-lg bg-qdrant-red/12 ring-1 ring-qdrant-red/30 px-6 py-3 text-center">
+                      <div className="eyebrow">Meaning</div>
+                      <div className="text-3xl font-semibold tracking-tight-brand text-qdrant-red">
+                        {latest.hits.length}
+                      </div>
+                      <div className="text-[0.625rem] text-fg-secondary">same query, same data</div>
+                    </div>
+                  </div>
+                )}
+                <div className="mb-4 flex items-end justify-between px-1">
+                  <div>
+                    <div className="eyebrow mb-1">&ldquo;{latest.text}&rdquo;</div>
+                    <div
+                      className="font-semibold tracking-tight-brand text-fg-primary leading-none"
+                      style={{ fontSize: "clamp(1.8rem, 3.1vw, 3rem)" }}
+                    >
+                      {latest.hits.length} answers.{" "}
+                      <span className="text-qdrant-red">{latest.serverMs < 1 ? "<1" : Math.round(latest.serverMs)} ms.</span>
+                    </div>
+                  </div>
+                  <div className="text-right text-xs text-fg-secondary/70">
+                    {latest.reranked && (
+                      <div>
+                        <span className="text-qdrant-red">re-ranked</span> {latest.fetched} → {latest.hits.length} in {latest.rerankMs} ms, in-browser
+                      </div>
+                    )}
+                    {((latest.nodesVisited / Math.max(movies.length, 1)) * 100).toFixed(1)}% of the data touched
+                  </div>
+                </div>
+                {/* HYBRID — three-way retrieval comparison */}
+                {latest.hybrid ? (
+                  <HybridCompare data={latest.hybrid} onOpen={openDetail} />
+                ) : (
+                <>
+                {/* BEFORE strip — pure vector-search order, for comparison */}
+                {latest.reranked && (
+                  <div className="mb-2">
+                    <div className="mb-1.5 text-[0.625rem] tracking-wide text-fg-secondary/70">
+                      Before, vector search order
+                    </div>
+                    <div
+                      className="grid gap-3"
+                      style={{ gridTemplateColumns: `repeat(${Math.min(latest.limit, 6)}, 1fr)` }}
+                    >
+                      {latest.origHits.slice(0, latest.limit).map((h, i) => {
+                        // Where did this one land after re-ranking?
+                        const newPos = latest.hits.findIndex((r) => r.id === h.id);
+                        return (
+                          <div
+                            key={`orig-${h.id}`}
+                            className="flex items-center gap-2 rounded-lg bg-white/[0.04] ring-1 ring-white/[0.06] px-2 py-1.5 opacity-75"
+                          >
+                            <span className="shrink-0 font-mono text-[0.625rem] text-fg-secondary">#{i + 1}</span>
+                            <span className="min-w-0 truncate text-[0.6875rem] text-fg-primary/85">{h.payload.title}</span>
+                            <span className="ml-auto shrink-0 text-[0.625rem] font-medium">
+                              {newPos === -1 ? (
+                                <span className="text-fg-secondary/60">out</span>
+                              ) : newPos < i ? (
+                                <span style={{ color: "#4CAF50" }}>→ #{newPos + 1}</span>
+                              ) : newPos > i ? (
+                                <span className="text-fg-secondary">→ #{newPos + 1}</span>
+                              ) : (
+                                <span className="text-fg-secondary/60">= #{newPos + 1}</span>
+                              )}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div className="mt-2 mb-1.5 text-[0.625rem] tracking-wide text-fg-secondary/70">
+                      After, cross-encoder re-rank
+                    </div>
+                  </div>
+                )}
+                <div
+                  className="grid gap-3"
+                  style={{ gridTemplateColumns: `repeat(${Math.min(latest.limit, 6)}, 1fr)` }}
+                >
+                  {latest.hits.slice(0, latest.limit).map((h, i) => (
+                    <ResultCard
+                      key={`${latest.text}-${h.id}`}
+                      hit={h}
+                      rank={i}
+                      euclid={latest.euclid}
+                      move={latest.reranked ? (latest.origRanks[i] ?? i) - i : 0}
+                      onClick={() => openDetail(h)}
+                    />
+                  ))}
+                </div>
+                </>
+                )}
+              </motion.div>
+            )}
+          </AnimatePresence>
 
           {error && (
-            <div className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-lg bg-qdrant-red/10 ring-1 ring-qdrant-red/40 px-4 py-2 text-xs text-fg-primary max-w-[70%] truncate">
+            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 rounded-lg bg-qdrant-red/10 ring-1 ring-qdrant-red/40 px-4 py-2 text-xs text-fg-primary max-w-[70%] truncate">
               {error}
             </div>
           )}
         </div>
-
-        {/* FOUR WAYS — the same question, raced. */}
-        <div className="h-[19vh] shrink-0">
-          <SearchAct query={current ?? null} />
-        </div>
-
-        {/* RANKED — what came back, and what re-ranking moved. */}
-        <div className="h-[18vh] shrink-0">
-          <RankAct query={current ?? null} />
-        </div>
       </main>
 
       {/* ─── COMPARE TAB ─── */}
+      {/* ACT FOUR — ranking, and the two scorers disagreeing. */}
+      <main className={`flex-1 min-h-0 ${tab === "rank" ? "block" : "hidden"}`}>
+        <RankAct />
+      </main>
 
-      <main className={`flex-1 min-h-0 px-10 pb-8 overflow-y-auto ${board ? "block" : "hidden"}`}>
+      {/* ACT TWO — the retrieval methods, raced against each other. */}
+      <main className={`flex-1 min-h-0 ${tab === "search" ? "block" : "hidden"}`}>
+        <SearchAct queries={queries} />
+      </main>
+
+      <main className={`min-h-0 px-10 pb-8 ${board ? "block" : "hidden"}`}>
         <CompareLab active={board} />
       </main>
 
       {/* ─── UNDER THE HOOD TAB ─── */}
-      <main className={`flex-1 min-h-0 px-10 pb-8 overflow-y-auto ${board ? "block" : "hidden"}`}>
+      <main className={`min-h-0 px-10 pb-8 ${board ? "block" : "hidden"}`}>
         <div className="max-w-[75rem] mx-auto">
           <h2 className="mt-2 mb-1 text-3xl font-semibold tracking-tight-brand text-fg-primary">
             What just happened, exactly.
@@ -1658,26 +1949,8 @@ export function HNSWLive({ mode = "pipeline" }: { mode?: "pipeline" | "board" })
 
       {/* FOOTER */}
       {/* pr-32 keeps clear of the fixed Fullscreen button, which sat on top of the right-hand item. */}
-      <footer className="flex items-center justify-between gap-6 border-t border-white/[0.05] pl-8 pr-32 py-2 text-[0.6875rem] text-fg-secondary/60 whitespace-nowrap">
-        <span className="flex items-center gap-x-5">
-        <span className="flex items-center gap-1.5">
-          <span
-            className={`inline-block h-1.5 w-1.5 rounded-full ${
-              clusterInfo?.status === "green" ? "bg-emerald-400" : clusterInfo ? "bg-amber-400" : "bg-white/20"
-            }`}
-          />
-          Qdrant Cloud {clusterInfo ? clusterInfo.status : "connecting"}
-        </span>
-        <span>
-          <span className="text-fg-primary/85 font-medium tabular-nums">
-            {clusterInfo ? clusterInfo.points_count.toLocaleString() : "—"}
-          </span>{" "}
-          vectors
-        </span>
-        <span>
-          <span className="text-fg-primary/85 font-medium">MiniLM</span>, embedded in your browser
-        </span>
-              </span>
+      <footer className="flex items-center justify-between border-t border-white/[0.05] pl-10 pr-32 py-3 text-[0.6875rem] text-fg-secondary/60">
+        <span className="font-mono">POST /collections/movies/points/search</span>
         {/* Every number on this screen is real. The drawing is not the graph,
             and someone in the crowd will know that — say it first. */}
         <span>Live results. The map is a 2-D projection; the drawn path is illustrative.</span>
