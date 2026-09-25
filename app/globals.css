@@ -48,12 +48,19 @@ body {
   font-feature-settings: "cv11", "ss01", "ss03";
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  overflow: hidden;
 }
 
+/* NB: no `overflow: hidden` here.
+   It used to sit on html and body, which locked every page in the app — and
+   /remote is a phone page taller than a phone, so the controls below the fold
+   were unreachable. The two booth routes clip themselves already: both page
+   wrappers are `h-screen w-screen overflow-hidden`, so nothing scrolls there
+   that should not. Anything that needs to scroll now can. */
 body {
   min-height: 100vh;
-  width: 100vw;
+  /* 100vw includes the scrollbar gutter, which is a horizontal scrollbar on
+     any page tall enough to have a vertical one. */
+  width: 100%;
 }
 
 * {
