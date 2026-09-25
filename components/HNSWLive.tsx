@@ -15,6 +15,7 @@ import { RankAct } from "./RankAct";
 import { MeasureAct } from "./MeasureAct";
 import { FilterAct } from "./FilterAct";
 import { EmbedStage } from "./EmbedStage";
+import { MetricsAct } from "./MetricsAct";
 
 const REPO_URL = "https://github.com/jkupchanko/qdrant-hnsw-live";
 
@@ -30,7 +31,7 @@ const REPO_URL = "https://github.com/jkupchanko/qdrant-hnsw-live";
  */
 
 type Phase = "typing" | "encoding" | "walking" | "results" | "hold" | "clearing";
-type Tab = "demo" | "search" | "filter" | "measure" | "rank" | "inside" | "compare";
+type Tab = "demo" | "search" | "metrics" | "filter" | "measure" | "rank" | "inside" | "compare";
 
 const WALK_MS = 2600;
 const RESULTS_MS = 800;
@@ -139,6 +140,20 @@ export function HNSWLive({ mode = "screens" }: { mode?: "screens" | "board" }) {
   const [movies, setMovies] = useState<Movie[]>([]);
   const [queries, setQueries] = useState<Query[]>([]);
   const [tab, setTab] = useState<Tab>(mode === "board" ? "inside" : "demo");
+  /**
+   * ?screen=metrics starts the loop on a given screen, and ?screen=metrics
+   * with &hold pins it there. Without this the only way to see the fourth
+   * screen is to stand in front of the booth for three minutes, which makes
+   * checking one screen impossible for whoever is setting it up.
+   */
+  const [held, setHeld] = useState(false);
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    const want = q.get("screen");
+    const valid: Tab[] = ["demo", "search", "metrics", "filter", "rank"];
+    if (want && (valid as string[]).includes(want)) setTab(want as Tab);
+    if (q.has("hold")) setHeld(true);
+  }, []);
   // ATTRACT ROTATION — nobody is standing here to press the tabs, so the
   // screen walks them itself. Two thirds of the story (the comparison and the
   // internals) used to be unreachable on an unattended screen. Dwell times are
@@ -251,20 +266,20 @@ export function HNSWLive({ mode = "screens" }: { mode?: "screens" | "board" }) {
   // off the tab they just opened.
   useEffect(() => {
     if (!rotating) return;
-    if (board) return;
+    if (board || held) return;
     const dwell: Record<Tab, number> = {
-      demo: 70_000, search: 50_000, filter: 45_000, measure: 45_000, rank: 50_000,
-      inside: 0, compare: 0,
+      demo: 70_000, search: 50_000, metrics: 40_000, filter: 45_000, measure: 45_000,
+      rank: 50_000, inside: 0, compare: 0,
     };
     // "measure" is built but out of the loop on purpose — see MeasureAct:
     // every vector here is unit length, so cosine, dot and Euclidean rank
     // identically. The screen worked and proved there was nothing to show.
-    const order: Tab[] = ["demo", "search", "filter", "rank"];
+    const order: Tab[] = ["demo", "search", "metrics", "filter", "rank"];
     const t = setTimeout(() => {
       setTab((cur) => order[(order.indexOf(cur) + 1) % order.length]);
     }, dwell[tab] * dwellScale);
     return () => clearTimeout(t);
-  }, [tab, rotating, dwellScale, board]);
+  }, [tab, rotating, dwellScale, board, held]);
 
   useEffect(() => {
     let resume: ReturnType<typeof setTimeout>;
@@ -1118,7 +1133,7 @@ export function HNSWLive({ mode = "screens" }: { mode?: "screens" | "board" }) {
             menu with four things missing. */}
         {!board && (
           <div className="flex shrink-0 items-center gap-2">
-            {(["demo", "search", "filter", "rank"] as Tab[]).map((t) => (
+            {(["demo", "search", "metrics", "filter", "rank"] as Tab[]).map((t) => (
               <span
                 key={t}
                 className="block rounded-full transition-all duration-500"
@@ -1813,6 +1828,12 @@ export function HNSWLive({ mode = "screens" }: { mode?: "screens" | "board" }) {
       {/* ACT FOUR — ranking, and the two scorers disagreeing. */}
       <main className={`flex-1 min-h-0 ${tab === "rank" ? "block" : "hidden"}`}>
         <RankAct />
+      </main>
+
+      {/* THREE WAYS TO SAY CLOSE — the geometry, with the maths running live
+          off one sweeping candidate rather than three static diagrams. */}
+      <main className={`flex-1 min-h-0 ${tab === "metrics" ? "block" : "hidden"}`}>
+        <MetricsAct />
       </main>
 
       {/* NARROWING IT DOWN — filters, and the clock refusing to move. */}
